@@ -26,7 +26,13 @@ export function getBleGattRequestOptions() {
 
 function pickArqDevice(devices) {
   if (!Array.isArray(devices)) return null
-  return devices.find(d => typeof d?.name === 'string' && d.name.startsWith(ARQ_NAME_PREFIX)) || null
+  const named = devices.find(d => typeof d?.name === 'string' && d.name.startsWith(ARQ_NAME_PREFIX))
+  if (named) return named
+  // A Windows helper advertises under the PC's adapter name (renaming needs
+  // admin + name_overwrite), so trust a sole granted device regardless of
+  // name — this origin only ever requests the helper, and a wrong pick
+  // self-heals via the stale-GATT chooser fallback.
+  return devices.length === 1 && devices[0] ? devices[0] : null
 }
 
 async function connectWithTimeout(device, timeoutMs = CONNECT_TIMEOUT_MS) {
@@ -127,6 +133,14 @@ export function testBleGattPickArqDevicePrefersNamePrefix() {
     _internals.pickArqDevice([]) === null &&
     _internals.pickArqDevice(undefined) === null
   console.log('ble gatt pick arq device:', pass ? 'PASS' : 'FAIL')
+  return pass
+}
+
+export function testBleGattPickArqDeviceFallsBackToSoleGrantedDevice() {
+  const pcNamed = { name: 'DESKTOP-ABC123', gatt: {} }
+  const pass = _internals.pickArqDevice([pcNamed]) === pcNamed &&
+    _internals.pickArqDevice([pcNamed, { name: 'AirPods', gatt: {} }]) === null
+  console.log('ble gatt pick arq device sole granted fallback:', pass ? 'PASS' : 'FAIL')
   return pass
 }
 

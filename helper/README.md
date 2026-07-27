@@ -106,6 +106,12 @@ The sender's Bluetooth chooser is filtered to devices advertising the
 only entry. Within one browser session, reconnecting reuses the already-granted
 device without showing the chooser at all.
 
+On Windows the helper's chooser entry shows the PC's name, not `BeamMeUp-ARQ`:
+WinRT advertises under the system Bluetooth adapter name, and renaming it
+would change the PC's Bluetooth identity systemwide (and needs Administrator
+rights), so the helper leaves it alone. The entry still appears because the
+chooser matches the advertised ARQ service UUID.
+
 To skip the chooser across page reloads and browser restarts too, enable two
 Chrome flags on the sender machine (both experimental, optional):
 

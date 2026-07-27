@@ -34,6 +34,7 @@ import {
   testBleGattSenderCopiesNotificationBuffer,
   testBleGattSenderUsesFilteredDiscovery,
   testBleGattPickArqDevicePrefersNamePrefix,
+  testBleGattPickArqDeviceFallsBackToSoleGrantedDevice,
   testBleGattAcquireSkipsChooserForGrantedDevice,
   testBleGattAcquireFallsBackToSessionCache,
   testBleGattAcquireTimesOutToChooser,
@@ -291,6 +292,7 @@ export function registerAllTests() {
   window.testBleGattSenderCopiesNotificationBuffer = testBleGattSenderCopiesNotificationBuffer
   window.testBleGattSenderUsesFilteredDiscovery = testBleGattSenderUsesFilteredDiscovery
   window.testBleGattPickArqDevicePrefersNamePrefix = testBleGattPickArqDevicePrefersNamePrefix
+  window.testBleGattPickArqDeviceFallsBackToSoleGrantedDevice = testBleGattPickArqDeviceFallsBackToSoleGrantedDevice
   window.testBleGattAcquireSkipsChooserForGrantedDevice = testBleGattAcquireSkipsChooserForGrantedDevice
   window.testBleGattAcquireFallsBackToSessionCache = testBleGattAcquireFallsBackToSessionCache
   window.testBleGattAcquireTimesOutToChooser = testBleGattAcquireTimesOutToChooser
@@ -544,6 +546,7 @@ export async function runAllTests() {
     arqBleSenderCopiesNotification: testBleGattSenderCopiesNotificationBuffer(),
     arqBleSenderDiscoveryOptions: testBleGattSenderUsesFilteredDiscovery(),
     arqBlePickArqDevice: testBleGattPickArqDevicePrefersNamePrefix(),
+    arqBlePickArqDeviceSole: testBleGattPickArqDeviceFallsBackToSoleGrantedDevice(),
     arqBleAcquireSkipsChooser: await testBleGattAcquireSkipsChooserForGrantedDevice(),
     arqBleAcquireSessionCache: await testBleGattAcquireFallsBackToSessionCache(),
     arqBleAcquireTimeoutChooser: await testBleGattAcquireTimesOutToChooser(),
