@@ -30,6 +30,7 @@ import {
   setLuma1DebugCapture,
   setLuma1SharpenCorrection,
   getLuma1SharpenCorrection,
+  sweepLuma1SharpenCorrection,
   isLuma1CalibrationPayload,
   getClassifierPerfAccumulator,
   setWasmClassifierEnabled
@@ -544,6 +545,19 @@ function postArqStateToWorker() {
   )
 }
 
+// The worker decodes with its own frame.js module instance, so the LUMA_1
+// peaking correction has to be pushed across explicitly — see the read pool's
+// equivalent in ensureReadPoolConfig(). Sent on worker-ready and again
+// whenever the lambda changes.
+function postSharpenLambdaToWorker() {
+  if (!receiverWorker || !receiverWorkerReady) return
+  postToWorker(
+    { type: 'setSharpenLambda', lambda: getLuma1SharpenCorrection() },
+    null,
+    { teardownOnError: false }
+  )
+}
+
 export function setHdmiUvcLabFrameTapEnabled(enabled) {
   state.labFrameTapEnabled = !!enabled
   if (state.labFrameTapEnabled) {
@@ -581,6 +595,7 @@ function handleWorkerReady(msg) {
   debugLog(`Worker ready (protocol v${msg.protocolVersion})`)
   postLabFrameTapStateToWorker()
   postArqStateToWorker()
+  postSharpenLambdaToWorker()
   if (state.workerCapturePending) {
     let started = false
     if (CAPTURE_METHOD === 'worker') started = startWorkerCapture()
@@ -2809,7 +2824,47 @@ function maybeArmLuma1SharpenCorrection(sharpenFit) {
   try {
     localStorage.setItem(LUMA1_SHARPEN_STORAGE_KEY, String(armed))
   } catch (_) { /* private mode */ }
+  postSharpenLambdaToWorker()
   debugLog(`[HDMI-RX] Luma4 sharpen correction ARMED: lambda=${armed} (from cal fit, persisted; clear with ?luma-sharpen=0)`)
+}
+
+// Frames of consecutive LUMA_1 CRC failure before the blind λ sweep runs.
+// High enough that a momentary glitch never pays for the extra decodes, low
+// enough that a receiver with no stored λ recovers within a second.
+const LUMA1_SHARPEN_SWEEP_AFTER_FAILS = 4
+
+// Recover the peaking correction from an ordinary failed frame. Without this
+// a receiver that has never stored a λ — a fresh profile, a cleared origin, a
+// different dev-server port — cannot decode a peaked channel at all, because
+// the calibration frame that used to supply λ no longer has a sender-side
+// producer. Runs at most once per relock cycle: the decodes are only worth
+// spending while genuinely unlocked.
+function maybeSweepLuma1Sharpen(result, imageBytes, frameWidth, region) {
+  if (!result || result.crcValid) return null
+  if (result._diag?.frameMode !== HDMI_MODE.LUMA_1) return null
+  if (getLuma1SharpenCorrection() !== null) return null
+  if (state.luma1SharpenSweepTried) return null
+  if ((state.decodeFailCount || 0) < LUMA1_SHARPEN_SWEEP_AFTER_FAILS) return null
+  state.luma1SharpenSweepTried = true
+  const startMs = performance.now()
+  const swept = sweepLuma1SharpenCorrection(imageBytes, frameWidth, region)
+  const elapsed = Math.round(performance.now() - startMs)
+  if (!swept) {
+    debugLog(
+      `[HDMI-RX] Luma4 sharpen blind sweep found no lambda in ${elapsed}ms - ` +
+      'channel problem is not horizontal peaking'
+    )
+    return null
+  }
+  try {
+    localStorage.setItem(LUMA1_SHARPEN_STORAGE_KEY, String(swept.lambda))
+  } catch (_) { /* private mode */ }
+  postSharpenLambdaToWorker()
+  debugLog(
+    `[HDMI-RX] Luma4 sharpen correction ARMED: lambda=${swept.lambda} ` +
+    `(blind sweep of a failed frame, ${elapsed}ms, persisted; clear with ?luma-sharpen=0)`
+  )
+  return swept.result
 }
 
 function restoreLuma1SharpenCorrection() {
@@ -3357,6 +3412,8 @@ async function processFrame(now, metadata) {
     result = decodeDataRegion(imageData.data, frameWidth, region)
     decodeMs += performance.now() - decodeStartMs
     classifierMs += getClassifierPerfAccumulator()
+    const swept = maybeSweepLuma1Sharpen(result, imageData.data, frameWidth, region)
+    if (swept) result = swept
   }
   noteLuma1SweepOutcome(result)
   logDenseBinaryConfidence(result)
@@ -3665,6 +3722,9 @@ async function processFrame(now, metadata) {
     state.expectedPacketCount = 0
     state.lockedLayoutFastPathMisses = 0
     state.decodeFailCount = 0
+    // A relock is a fresh look at the channel — let the λ sweep run again if
+    // it is still unarmed (a no-op once a lambda is armed or persisted).
+    state.luma1SharpenSweepTried = false
   }
 
   // Update debug canvas (skip the copy entirely while the panel is hidden)

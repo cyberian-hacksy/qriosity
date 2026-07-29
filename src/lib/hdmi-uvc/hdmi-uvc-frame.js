@@ -275,6 +275,44 @@ export function unsharpenLuma1Row(vals, count, lambda, railLo, railHi) {
   return vals
 }
 
+// Candidate peaking strengths for the blind sweep below. The dongle measured
+// live sits at ~0.45; the ladder brackets it widely enough to cover other
+// capture hardware while staying inside setLuma1SharpenCorrection's accepted
+// range. λ=0 is deliberately absent — the caller has already decoded once at
+// the current setting, which is the uncorrected case whenever nothing is armed.
+export const LUMA1_SHARPEN_LADDER = [0.45, 0.35, 0.55, 0.25, 0.65, 0.8]
+
+// Blind λ recovery. The correction used to be armed only from a sender
+// calibration frame; with that path gone, a receiver that has never stored a λ
+// can never decode a peaked channel and fails every frame forever. Re-decoding
+// one already-failed frame across the ladder costs a handful of decodes once
+// per lock and needs no cooperation from the sender: a valid payload CRC is
+// proof the λ is right, since a wrong deconvolution cannot forge one.
+//
+// Returns { lambda, result } on success and leaves that λ armed; on failure
+// restores the λ that was in effect on entry and returns null.
+export function sweepLuma1SharpenCorrection(imageData, width, region, options = {}) {
+  const previous = getLuma1SharpenCorrection()
+  const ladder = options.ladder || LUMA1_SHARPEN_LADDER
+  const wasDebugCapture = luma1DebugCaptureEnabled
+  // The evidence block costs ~100ms per decode and nothing reads it here.
+  setLuma1DebugCapture(false)
+  try {
+    for (const lambda of ladder) {
+      if (setLuma1SharpenCorrection(lambda) === null) continue
+      const result = decodeDataRegion(imageData, width, region, options.decodeOptions || {})
+      if (result?.crcValid) return { lambda, result }
+    }
+    setLuma1SharpenCorrection(previous)
+    return null
+  } catch (err) {
+    setLuma1SharpenCorrection(previous)
+    throw err
+  } finally {
+    setLuma1DebugCapture(wasDebugCapture)
+  }
+}
+
 function getDenseBinaryPayloadEdgeGuardCells(mode, explicit = null) {
   return Number.isFinite(explicit) && explicit >= 0
     ? explicit

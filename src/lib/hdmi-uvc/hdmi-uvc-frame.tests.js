@@ -26,7 +26,9 @@ import {
   setLuma1SweepTimeBudgetMs,
   setLuma1DebugCapture,
   setLuma1SharpenCorrection,
+  getLuma1SharpenCorrection,
   getLuma1SharpenRailHeadroom,
+  sweepLuma1SharpenCorrection,
   _internals
 } from './hdmi-uvc-frame.js'
 import {
@@ -772,6 +774,70 @@ export function testLuma1SharpenCorrectionRoundtrip() {
   } catch (err) {
     setLuma1SharpenCorrection(null)
     console.log('LUMA_1 sharpen correction roundtrip test: FAIL', err?.message || err)
+    return false
+  } finally {
+    setLuma1SenderMidLevels(priorLevels[1], priorLevels[2])
+  }
+}
+
+// The correction is worthless if nothing can arm it. With the sender's
+// calibration path gone, a receiver holding no stored λ must recover one from
+// an ordinary failed frame, or a peaked channel fails every frame forever.
+export function testLuma1SharpenBlindSweepArmsCorrection() {
+  const priorLevels = getLuma1SenderLevels()
+  try {
+    const width = 640
+    const height = 407
+    const lambda = 0.45
+    setLuma1SenderMidLevels(85, 170)
+    setLuma1SharpenCorrection(null)
+    const cap = getPayloadCapacity(width, height, HDMI_MODE.LUMA_1)
+    const payload = new Uint8Array(cap)
+    for (let i = 0; i < payload.length; i++) payload[i] = (i * 31 + 7) & 0xff
+    const frame = buildFrame(payload, HDMI_MODE.LUMA_1, width, height, 30, 83)
+
+    // Same forward channel the dongle applies: 1D horizontal unsharp mask.
+    const sharpened = new Uint8ClampedArray(frame)
+    for (let y = 0; y < height; y++) {
+      for (let x = 1; x < width - 1; x++) {
+        const i = (y * width + x) * 4
+        const v = Math.round(frame[i] + lambda * (frame[i] - (frame[i - 4] + frame[i + 4]) / 2))
+        sharpened[i] = sharpened[i + 1] = sharpened[i + 2] = v
+      }
+    }
+
+    const region = dataRegionFromAnchors(detectAnchors(sharpened, width, height))
+    const uncorrected = region ? decodeDataRegion(sharpened, width, region) : null
+
+    const swept = region ? sweepLuma1SharpenCorrection(sharpened, width, region) : null
+    const armed = getLuma1SharpenCorrection()
+    const payloadOk = !!(swept?.result?.payload &&
+      swept.result.payload.length === payload.length &&
+      swept.result.payload.every((v, i) => v === payload[i]))
+
+    // A clean (unpeaked) frame must leave the sweep unarmed rather than
+    // latching a bogus λ onto hardware that does no peaking at all.
+    setLuma1SharpenCorrection(null)
+    const cleanRegion = dataRegionFromAnchors(detectAnchors(frame, width, height))
+    const cleanSwept = cleanRegion
+      ? sweepLuma1SharpenCorrection(frame, width, cleanRegion, { ladder: [0.45] })
+      : null
+    // The clean frame already decodes, so the sweep is never reached live; if
+    // it is run anyway it must not leave a wrong λ armed on failure.
+    const cleanLambda = getLuma1SharpenCorrection()
+    const cleanOk = cleanSwept === null ? cleanLambda === null : cleanSwept.lambda === 0.45
+    setLuma1SharpenCorrection(null)
+
+    const pass = !!(uncorrected && !uncorrected.crcValid &&
+      swept && swept.result.crcValid && armed === swept.lambda &&
+      Number.isFinite(armed) && payloadOk && cleanOk)
+    console.log('LUMA_1 sharpen blind sweep test:', pass ? 'PASS' : 'FAIL', {
+      uncorrectedCrc: uncorrected?.crcValid, sweptLambda: swept?.lambda, armed, payloadOk, cleanOk
+    })
+    return pass
+  } catch (err) {
+    setLuma1SharpenCorrection(null)
+    console.log('LUMA_1 sharpen blind sweep test: FAIL', err?.message || err)
     return false
   } finally {
     setLuma1SenderMidLevels(priorLevels[1], priorLevels[2])

@@ -30,7 +30,12 @@
 //   { type: 'captureStopped' }
 //   { type: 'error', id?, message }
 
-import { detectAnchors, dataRegionFromAnchors, decodeDataRegion } from './hdmi-uvc-frame.js'
+import {
+  detectAnchors,
+  dataRegionFromAnchors,
+  decodeDataRegion,
+  setLuma1SharpenCorrection
+} from './hdmi-uvc-frame.js'
 import { createDecoder } from '../decoder.js'
 import { ingestCapturedFrame } from './hdmi-uvc-capture-pump.js'
 import { buildArqPacketObservations } from './hdmi-uvc-arq-observation.js'
@@ -627,6 +632,15 @@ self.onmessage = (event) => {
               type: 'error', message: 'wasm load: ' + (err?.message || err)
             }))
         }
+        break
+      case 'setSharpenLambda':
+        // frame.js keeps the LUMA_1 peaking correction in a module-level
+        // global, and this worker holds its own module instance — without
+        // this push it would decode every LUMA_1 frame uncorrected while the
+        // main thread and the read pool decode with the correction armed.
+        setLuma1SharpenCorrection(
+          Number.isFinite(msg.lambda) && msg.lambda > 0 ? msg.lambda : null
+        )
         break
       case 'initDecoder':
         reply = handleInitDecoder()
