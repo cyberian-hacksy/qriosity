@@ -6,6 +6,7 @@ import { PALETTE_RGB } from './color/palette.js'
 import { wireDropZone } from './shared/dropzone.js'
 import { acquireWakeLock, releaseWakeLock } from './shared/wake-lock.js'
 import { maybeCompress } from './shared/compression.js'
+import { packSnippet } from './shared/snippet.js'
 import { createEncoder } from './encoder.js'
 import { formatBytes } from './format.js'
 import { announce, flashHighlight } from './feedback.js'
@@ -405,7 +406,7 @@ async function processFile(file) {
   if (!file) return
 
   if (file.size > MAX_FILE_SIZE) {
-    showError('File too large for QR transfer (limit 20 MB). Use CIMBAR (up to 33 MB) or HDMI-UVC (up to 1 GB) from the home screen.')
+    showError('File too large for QR transfer (limit ' + (MAX_FILE_SIZE / (1024 * 1024)) + ' MB). Use HDMI-UVC (up to 1 GB) from the home screen.')
     return
   }
 
@@ -619,7 +620,12 @@ export function initSender(errorHandler) {
     btnStop: document.getElementById('btn-stop-send'),
     statSymbol: document.getElementById('stat-symbol'),
     modeSelector: document.getElementById('qr-mode-selector'),
-    modeButtons: document.querySelectorAll('#qr-mode-selector .mode-btn')
+    modeButtons: document.querySelectorAll('#qr-mode-selector .mode-btn'),
+    btnPayloadFile: document.getElementById('btn-payload-file'),
+    btnPayloadText: document.getElementById('btn-payload-text'),
+    snippetPane: document.getElementById('snippet-pane'),
+    snippetText: document.getElementById('snippet-text'),
+    btnSendSnippet: document.getElementById('btn-send-snippet')
   }
 
   // Set initial state
@@ -629,6 +635,28 @@ export function initSender(errorHandler) {
   // Apply mode-specific defaults for initial mode (BW); nothing user-chosen
   // is being overwritten yet, so skip the adjustment notice.
   applyModeDefaults(state.mode, { notify: false })
+
+  // Payload-type toggle: Text swaps the drop-zone flow for a paste box. The
+  // snippet still travels the file pipeline (hash/gzip/fountain) — it's a
+  // synthetic File with a private MIME type the receiver shows inline.
+  const setPayloadKind = (kind) => {
+    const isText = kind === 'text'
+    elements.btnPayloadFile.classList.toggle('active', !isText)
+    elements.btnPayloadFile.setAttribute('aria-pressed', String(!isText))
+    elements.btnPayloadText.classList.toggle('active', isText)
+    elements.btnPayloadText.setAttribute('aria-pressed', String(isText))
+    elements.snippetPane.classList.toggle('hidden', !isText)
+  }
+  elements.btnPayloadFile.onclick = () => setPayloadKind('file')
+  elements.btnPayloadText.onclick = () => setPayloadKind('text')
+  elements.btnSendSnippet.onclick = () => {
+    try {
+      const { bytes, filename, mimeType } = packSnippet(elements.snippetText.value)
+      processFile(new File([bytes], filename, { type: mimeType }))
+    } catch (err) {
+      showError(err.message)
+    }
+  }
 
   // Bind event handlers
   elements.dataSlider.oninput = handleDataPresetChange

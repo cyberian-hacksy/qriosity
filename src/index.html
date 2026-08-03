@@ -57,6 +57,16 @@
     <main>
       <input type="file" id="file-input" class="visually-hidden" tabindex="-1" aria-hidden="true">
 
+      <div class="mode-selector" id="payload-selector">
+        <button id="btn-payload-file" class="mode-btn active" aria-pressed="true">File</button>
+        <button id="btn-payload-text" class="mode-btn" aria-pressed="false">Text</button>
+      </div>
+      <div id="snippet-pane" class="snippet-pane hidden">
+        <textarea id="snippet-text" rows="4" placeholder="Paste or type text to send&hellip;"
+          aria-label="Text to send"></textarea>
+        <button id="btn-send-snippet">Send text</button>
+      </div>
+
       <div class="qr-container drop-zone" id="qr-container" role="button" tabindex="0" aria-label="Choose a file to send">
         <div id="qr-placeholder" class="drop-zone-content">
           <div class="drop-zone-icon" aria-hidden="true">+</div>
@@ -83,7 +93,7 @@
         </div>
         <div class="slider-group">
           <label for="speed-slider">Speed</label>
-          <input type="range" id="speed-slider" min="0" max="3" value="1" step="1">
+          <input type="range" id="speed-slider" min="0" max="4" value="1" step="1">
           <span id="speed-display">Normal (100ms)</span>
         </div>
         <div class="file-status">
@@ -130,6 +140,16 @@
           <span id="stat-symbols" class="stat-count">0 codes</span>
           <button id="btn-reset-receiver" class="reset-btn">Reset</button>
         </div>
+        <div id="no-signal-hint" class="no-signal-hint hidden" role="status">
+          <strong>Nothing decoded yet — try this</strong>
+          <ul>
+            <li>On the <em>sender</em>, drop the Data preset (Light decodes where Insane can't).</li>
+            <li>Turn the sending screen's brightness all the way up.</li>
+            <li>Fill this camera's view with the code and prop the phone against something — autofocus hunting from hand tremor is the usual culprit.</li>
+            <li>Still nothing? Slow the sender down (Speed preset).</li>
+          </ul>
+          <button id="btn-dismiss-no-signal" class="secondary">Dismiss</button>
+        </div>
         <div class="status-receiving hidden" id="status-receiving">
           <div class="status-file-row">
             <span id="file-name-display">-</span>
@@ -148,8 +168,10 @@
             <span id="complete-file-name">-</span>
             <span id="complete-rate" class="complete-rate"></span>
           </div>
+          <div id="snippet-result" class="snippet-result hidden"></div>
           <div class="complete-actions">
             <button id="btn-download">Download</button>
+            <button id="btn-copy-snippet" class="hidden">Copy</button>
             <button id="btn-receive-another" class="secondary">Receive Another</button>
           </div>
         </div>

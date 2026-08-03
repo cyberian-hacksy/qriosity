@@ -1,7 +1,7 @@
 // Shared display formatting helpers used by all sender/receiver UI modules.
 
-// Format bytes to human readable (KB/MB/GB tiers cover QR's 20 MB limit up
-// to HDMI-UVC's 1 GB limit).
+// Format bytes to human readable (KB/MB/GB tiers cover every mode's limit up
+// to HDMI-UVC's 1 GB).
 export function formatBytes(bytes) {
   if (bytes < 1024) return bytes + ' B'
   if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'

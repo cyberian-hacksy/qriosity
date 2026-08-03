@@ -576,6 +576,56 @@ button.secondary:disabled { opacity: 0.5; cursor: not-allowed; }
 }
 .hidden { display: none !important; }
 
+/* Text snippet: sender paste pane and receiver inline result. */
+.snippet-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+.snippet-pane textarea {
+  width: 100%;
+  resize: vertical;
+  padding: 0.5rem;
+  background: #16213e;
+  color: inherit;
+  border: 1px solid #333;
+  border-radius: 4px;
+  font: inherit;
+}
+.snippet-result {
+  margin: 0.5rem 0;
+  padding: 0.75rem;
+  background: #16213e;
+  border: 1px solid #333;
+  border-radius: 4px;
+  text-align: left;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 12rem;
+  overflow-y: auto;
+  user-select: text;
+}
+
+/* "Nothing decoded yet" hint (QR receiver). Appears after 10s of camera with
+   zero decodes; the fixes it lists are on the SENDER, which is the
+   non-obvious part for someone staring at a blank receiver. */
+.no-signal-hint {
+  margin-top: 0.5rem;
+  padding: 0.75rem;
+  border: 2px solid #f0a500;
+  border-radius: 4px;
+  background: #16213e;
+  font-size: 0.875rem;
+  text-align: left;
+}
+.no-signal-hint strong { color: #f0a500; }
+.no-signal-hint ul {
+  margin: 0.5rem 0;
+  padding-left: 1.25rem;
+}
+.no-signal-hint li { margin-bottom: 0.375rem; }
+
 /* Debug / diagnostics panels (QR receiver + HDMI-UVC sender/receiver).
    Type and spacing in rem so user font-size preferences scale them;
    0.75rem (12px) is the floor for legibility. */

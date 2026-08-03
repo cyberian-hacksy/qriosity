@@ -25,7 +25,10 @@ export const MODE_MARGIN_RATIOS = {
 export const PATCH_SIZE_RATIO = 0.42   // Patch size as ratio of margin
 export const PATCH_GAP_RATIO = 0.08    // Gap as ratio of margin
 export const BLOCK_SIZE = 200
-export const MAX_FILE_SIZE = 20 * 1024 * 1024 // 20MB
+// QR-mode limit. Was 20MB when the mode peaked at ~8 KB/s; binary v40 frames
+// plus adaptive gzip make 64MB (decimen parity) practical. Wire format is
+// nowhere near its ceilings at this size (K' is 24-bit, sizes are uint32).
+export const MAX_FILE_SIZE = 64 * 1024 * 1024 // 64MB
 export const METADATA_INTERVAL = 10
 export const FOUNTAIN_DEGREE = 3
 export const DEGREE_ONE_PROBABILITY = 0.15
@@ -61,10 +64,13 @@ export const DEFAULT_SIZE_PRESET = 2
 
 // Speed presets (frame interval in ms). Turbo ≈ 30fps: on a 60Hz panel each
 // frame still owns two refresh cycles, so captures don't straddle transitions.
+// Ludicrous ≈ 60fps is for 120Hz sender screens only — on a 60Hz panel the
+// camera catches half-drawn frames and throughput goes DOWN, not up.
 export const SPEED_PRESETS = [
   { name: 'Slow', interval: 200 },
   { name: 'Normal', interval: 100 },
   { name: 'Fast', interval: 50 },
-  { name: 'Turbo', interval: 33 }
+  { name: 'Turbo', interval: 33 },
+  { name: 'Ludicrous', interval: 16 }
 ]
 export const DEFAULT_SPEED_PRESET = 1

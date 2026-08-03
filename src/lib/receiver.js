@@ -12,6 +12,9 @@ import { confirmDialog } from './confirm-dialog.js'
 import { triggerBlobDownload } from './shared/download.js'
 import { acquireWakeLock, releaseWakeLock } from './shared/wake-lock.js'
 import { isMobileUA, listVideoInputs, populateCameraSelect, nextCamera } from './shared/camera.js'
+import { NoSignalHintTimer } from './shared/no-signal.js'
+import { estimateQrProgress } from './shared/transfer-progress.js'
+import { isSnippet, snippetText } from './shared/snippet.js'
 
 // Debug mode - enabled via ?test URL parameter (exact param, not substring)
 const DEBUG_MODE = typeof location !== 'undefined' && new URLSearchParams(location.search).has('test')
@@ -254,8 +257,16 @@ async function startScanning(deviceId) {
   }
 
   try {
+    // Ask for HD explicitly — browsers default to ~640×480 when the page is
+    // silent, and a v40 QR (177 modules + quiet zone) needs the pixels.
+    // `ideal` degrades gracefully on cameras that can't deliver it.
     state.stream = await navigator.mediaDevices.getUserMedia({
-      video: { deviceId: { exact: deviceId }, facingMode: 'environment' }
+      video: {
+        deviceId: { exact: deviceId },
+        facingMode: 'environment',
+        width: { ideal: 1280 },
+        height: { ideal: 720 }
+      }
     })
 
     state.currentCameraId = deviceId
@@ -264,6 +275,14 @@ async function startScanning(deviceId) {
     elements.video.srcObject = state.stream
     await elements.video.play()
 
+    // Report what the camera actually negotiated — iOS in particular will
+    // happily accept a request and deliver something else.
+    const settings = state.stream.getVideoTracks()[0]?.getSettings?.()
+    if (settings?.width) {
+      console.log('Camera negotiated ' + settings.width + '×' + settings.height +
+        '@' + Math.round(settings.frameRate || 0) + 'fps')
+    }
+
     // Create offscreen canvas for scanning
     state.canvas = document.createElement('canvas')
     state.ctx = state.canvas.getContext('2d', { willReadFrequently: true })
@@ -271,6 +290,8 @@ async function startScanning(deviceId) {
     // Reset decoder and calibration
     state.decoder = createDecoder()
     initZxingPool()
+    noSignalHint = new NoSignalHintTimer(10_000)
+    noSignalHint.cameraStarted(performance.now())
     state.symbolTimes = []
     state.reconstructedBlob = null
     state.startTime = Date.now()
@@ -281,7 +302,9 @@ async function startScanning(deviceId) {
     state.announcedReceiving = false
 
     showStatus('scanning')
-    setScanningLabel('Scanning…')
+    setScanningLabel(settings?.width
+      ? 'Scanning… ' + settings.width + '×' + settings.height
+      : 'Scanning…')
     elements.statSymbols.textContent = '0 codes'
 
     // Cache overlay geometry now that the video has dimensions; scanFrame
@@ -302,6 +325,7 @@ function stopScanning() {
   state.isScanning = false
   releaseWakeLock()
   teardownZxingPool()
+  hideNoSignalPanel()
 
   if (state.animationId) {
     cancelAnimationFrame(state.animationId)
@@ -349,7 +373,23 @@ async function toggleMobileCamera(e) {
 }
 
 // Process a decoded packet
+// Ten seconds of camera and not one decoded frame → the sender is almost
+// certainly too dense/dim for this camera. The fixes live on the SENDER,
+// which is the non-obvious part for someone staring at a blank receiver.
+let noSignalHint = null
+
+function showNoSignalPanel() {
+  elements.noSignalHint?.classList.remove('hidden')
+}
+
+function hideNoSignalPanel() {
+  elements.noSignalHint?.classList.add('hidden')
+}
+
 function processPacket(bytes) {
+  // First decode ends the hint for good — the link demonstrably works.
+  if (noSignalHint?.frameDecoded()) hideNoSignalPanel()
+
   let accepted = state.decoder.receive(bytes)
 
   // Handle new session (sender changed settings)
@@ -506,6 +546,8 @@ function handleBWPacketBytes(bytes) {
 // Scan a single frame
 function scanFrame() {
   if (!state.isScanning) return
+
+  if (noSignalHint?.tick(performance.now())) showNoSignalPanel()
 
   const video = elements.video
   const canvas = state.canvas
@@ -791,7 +833,17 @@ function updateReceiverStats() {
       announce('Receiving ' + decoder.metadata.filename)
     }
 
-    const progress = (solved / k * 100)
+    // Hybrid bar: symbol arrival drives a smoothly moving baseline, solved
+    // blocks can push it further ahead; capped at 99% until verification.
+    const elapsedSeconds = state.startTime ? (Date.now() - state.startTime) / 1000 : 0
+    const estimate = estimateQrProgress({
+      K: k,
+      KPrime: decoder.K_prime || k,
+      solved,
+      uniqueSymbols,
+      elapsedSeconds
+    })
+    const progress = estimate.fraction * 100
     elements.progressFill.style.width = progress + '%'
     elements.progressFill.parentElement.setAttribute('aria-valuenow', String(Math.round(progress)))
     elements.statBlocks.textContent = solved + '/' + k
@@ -807,13 +859,9 @@ function updateReceiverStats() {
       const bytesInWindow = times.length * bytesPerBlock
       const rateKBps = windowDuration > 0 ? (bytesInWindow / windowDuration / 1024) : 0
       elements.statRate.textContent = rateKBps.toFixed(1) + ' KB/s'
-
-      // Estimate remaining time
-      const remaining = k - solved
-      const remainingBytes = remaining * bytesPerBlock
-      const etaMs = rateKBps > 0 ? (remainingBytes / 1024 / rateKBps * 1000 * 1.3) : 0
-      elements.statEta.textContent = etaMs > 0 ? ('~' + formatTime(etaMs)) : ''
     }
+    elements.statEta.textContent =
+      estimate.etaSeconds !== undefined ? ('~' + formatTime(estimate.etaSeconds * 1000)) : ''
   } else {
     // Still in scanning phase
     elements.statSymbols.textContent = uniqueSymbols + ' codes'
@@ -841,6 +889,16 @@ async function onReceiveComplete() {
 
     state.reconstructedBlob = new Blob([data], { type: metadata.mimeType })
     state.fileDownloaded = false
+
+    // Text snippets show inline with a Copy button instead of downloading.
+    // The text is on screen, so don't nag about an unsaved download on leave.
+    const snippet = isSnippet(metadata)
+    state.snippetText = snippet ? snippetText(data) : null
+    if (snippet) state.fileDownloaded = true
+    elements.snippetResult.textContent = snippet ? state.snippetText : ''
+    elements.snippetResult.classList.toggle('hidden', !snippet)
+    elements.btnCopySnippet.classList.toggle('hidden', !snippet)
+    elements.btnDownload.classList.toggle('hidden', snippet)
 
     // Calculate average transfer rate
     const totalSeconds = totalTime / 1000
@@ -927,6 +985,7 @@ export function initReceiver(errorHandler) {
   showError = errorHandler
 
   elements = {
+    noSignalHint: document.getElementById('no-signal-hint'),
     cameraDropdown: document.getElementById('camera-dropdown'),
     cameraPicker: document.getElementById('camera-picker'),
     btnCameraSwitch: document.getElementById('btn-camera-switch'),
@@ -945,6 +1004,8 @@ export function initReceiver(errorHandler) {
     statRate: document.getElementById('stat-rate'),
     statEta: document.getElementById('stat-eta'),
     btnDownload: document.getElementById('btn-download'),
+    btnCopySnippet: document.getElementById('btn-copy-snippet'),
+    snippetResult: document.getElementById('snippet-result'),
     btnReceiveAnother: document.getElementById('btn-receive-another'),
     btnResetReceiver: document.getElementById('btn-reset-receiver'),
     completeRate: document.getElementById('complete-rate'),
@@ -973,8 +1034,16 @@ export function initReceiver(errorHandler) {
   elements.btnCameraSwitch.onclick = toggleMobileCamera
   elements.cameraDropdown.onchange = (e) => switchCamera(e.target.value)
   elements.btnDownload.onclick = downloadFile
+  elements.btnCopySnippet.onclick = () =>
+    copyWithButtonFeedback(elements.btnCopySnippet, state.snippetText)
   elements.btnReceiveAnother.onclick = restartReceiver
   elements.btnResetReceiver.onclick = restartReceiver
+  document.getElementById('btn-dismiss-no-signal').onclick = () => {
+    // Dismissing re-arms the countdown — nothing about the tap makes frames
+    // start arriving, so if it's still dead in 10s the advice is the advice.
+    noSignalHint?.dismiss(performance.now())
+    hideNoSignalPanel()
+  }
   elements.btnCopyLog.onclick = () =>
     copyWithButtonFeedback(elements.btnCopyLog, elements.debugLog.textContent)
   if (elements.btnClearLog) {

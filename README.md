@@ -14,6 +14,8 @@ Air-gapped file transfer between devices with zero network connectivity. Three t
 
 **100% Local & Private** - Nothing is uploaded to any server. All encoding, decoding, and file handling happens entirely in your browser. The app works offline after first load.
 
+**Install it** - The hosted site is a PWA: open it once, add it to your home screen, and it keeps working with the network off — camera and all decoders included. That is the recommended way to run the receiver on a phone: opening the raw HTML file from local storage blocks camera access on iOS and Android (a browser rule about `file://` pages, not something the app can work around).
+
 ## How It Works
 
 1. **Sender** device encodes a file into a continuous stream of visual patterns
@@ -43,7 +45,9 @@ All modes require this app on both sender and receiver devices.
 - **Cross-device** - Works between any devices with a screen and camera
 - **Mobile-optimized** - Auto-starts camera, simple toggle for front/back cameras
 - **Drag & drop** - Drop files directly onto the sender screen
-- **Large files** - Up to 20 MB via QR, 33 MB via CIMBAR, 1 GB via HDMI-UVC
+- **Text snippets** - Paste text on the QR sender; the receiver shows it with a Copy button instead of downloading
+- **Install as an app** - PWA with full offline support once installed
+- **Large files** - Up to 64 MB via QR, 33 MB via CIMBAR, 1 GB via HDMI-UVC
 
 ## Usage
 
@@ -59,12 +63,15 @@ All modes require this app on both sender and receiver devices.
 Best for: Small files, compatibility with other apps
 
 1. Click "SEND" under QR Transfer
-2. Drag a file onto the drop zone or click to select (max 20MB)
+2. Drag a file onto the drop zone or click to select (max 64MB)
 3. Adjust presets as needed:
    - **Data** - Block size (Light 150B - Insane 2938B; Ultra/Insane are BW-mode only)
    - **Size** - QR display size (Small 320px - XL 680px)
-   - **Speed** - Frame rate (Slow 200ms - Turbo 33ms)
+   - **Speed** - Frame rate (Slow 200ms - Ludicrous 16ms; Ludicrous needs a 120Hz sender screen)
 4. Click "Start" to begin transmission
+
+To send text instead of a file, switch the sender to **Text**, paste, and hit
+"Send text" — the receiver shows the text with a Copy button.
 
 ### CIMBAR Transfer
 
@@ -101,7 +108,10 @@ pnpm dev
 # Build single-file output
 pnpm build
 
-# Run tests
+# Run the Node test suite (also runs in CI)
+pnpm test
+
+# Full browser suite (adds DOM/receiver tests)
 # Visit http://localhost:5173/?test
 ```
 
@@ -125,7 +135,7 @@ pnpm build
 
 ## Limitations
 
-- Max file size: 20 MB (QR), 33 MB (CIMBAR), 1 GB (HDMI-UVC)
+- Max file size: 64 MB (QR), 33 MB (CIMBAR), 1 GB (HDMI-UVC)
 - Camera modes require good lighting and steady positioning
 - Browser tab must stay in the foreground during transfer (a screen wake lock
   is held automatically, but switching apps still pauses it)

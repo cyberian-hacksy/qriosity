@@ -12,7 +12,12 @@ import { testXorBytesInto } from './lib/xor.js'
 import { testMetadataRoundtrip, testMetadataNoRedundancyFlag, testMetadataRepairIdleFlag, testMetadataCompressionFlag } from './lib/metadata.js'
 import { testWakeLockStateMachine, testWakeLockSurvivesMissingApi } from './lib/shared/wake-lock.tests.js'
 import { testQrModulesBinaryRoundtrip, testQrModulesStableGeometry } from './lib/qr-modules.tests.js'
+import { testGoldenPacket, testGoldenMetadata, testGoldenSymbolIndices, testGoldenQrMatrix, testGoldenGzipDecode } from './lib/golden-vectors.tests.js'
 import { testDecodeWorkerPoolSubmitAndDrain, testDecodeWorkerPoolResize } from './lib/shared/decode-worker-pool.tests.js'
+import { testNoSignalHintLifecycle, testNoSignalHintEndsOnDecode } from './lib/shared/no-signal.tests.js'
+import { testSafeFileName } from './lib/shared/download.tests.js'
+import { testProgressMonotonicAndBounded, testProgressMovesWhileSolvedStalls, testEtaBehaviour } from './lib/shared/transfer-progress.tests.js'
+import { testSnippetRoundtrip, testSnippetLimits } from './lib/shared/snippet.tests.js'
 import {
   testCompressionRoundtrip,
   testCompressionSkipsSmallAndPrecompressed,
@@ -248,8 +253,21 @@ export function registerAllTests() {
   window.testWakeLockSurvivesMissingApi = testWakeLockSurvivesMissingApi
   window.testQrModulesBinaryRoundtrip = testQrModulesBinaryRoundtrip
   window.testQrModulesStableGeometry = testQrModulesStableGeometry
+  window.testGoldenPacket = testGoldenPacket
+  window.testGoldenMetadata = testGoldenMetadata
+  window.testGoldenSymbolIndices = testGoldenSymbolIndices
+  window.testGoldenQrMatrix = testGoldenQrMatrix
+  window.testGoldenGzipDecode = testGoldenGzipDecode
   window.testDecodeWorkerPoolSubmitAndDrain = testDecodeWorkerPoolSubmitAndDrain
   window.testDecodeWorkerPoolResize = testDecodeWorkerPoolResize
+  window.testNoSignalHintLifecycle = testNoSignalHintLifecycle
+  window.testNoSignalHintEndsOnDecode = testNoSignalHintEndsOnDecode
+  window.testSafeFileName = testSafeFileName
+  window.testProgressMonotonicAndBounded = testProgressMonotonicAndBounded
+  window.testProgressMovesWhileSolvedStalls = testProgressMovesWhileSolvedStalls
+  window.testEtaBehaviour = testEtaBehaviour
+  window.testSnippetRoundtrip = testSnippetRoundtrip
+  window.testSnippetLimits = testSnippetLimits
   window.testCompressionRoundtrip = testCompressionRoundtrip
   window.testCompressionSkipsSmallAndPrecompressed = testCompressionSkipsSmallAndPrecompressed
   window.testCompressionIncompressibleFallback = testCompressionIncompressibleFallback
@@ -513,8 +531,21 @@ export async function runAllTests() {
     wakeLockMissingApi: await testWakeLockSurvivesMissingApi(),
     qrModulesBinaryRoundtrip: testQrModulesBinaryRoundtrip(),
     qrModulesStableGeometry: testQrModulesStableGeometry(),
+    goldenPacket: testGoldenPacket(),
+    goldenMetadata: testGoldenMetadata(),
+    goldenSymbolIndices: testGoldenSymbolIndices(),
+    goldenQrMatrix: testGoldenQrMatrix(),
+    goldenGzipDecode: await testGoldenGzipDecode(),
     decodeWorkerPoolSubmitDrain: testDecodeWorkerPoolSubmitAndDrain(),
     decodeWorkerPoolResize: testDecodeWorkerPoolResize(),
+    noSignalHintLifecycle: testNoSignalHintLifecycle(),
+    noSignalHintEndsOnDecode: testNoSignalHintEndsOnDecode(),
+    safeFileName: testSafeFileName(),
+    progressMonotonic: testProgressMonotonicAndBounded(),
+    progressMovesThroughStall: testProgressMovesWhileSolvedStalls(),
+    progressEta: testEtaBehaviour(),
+    snippetRoundtrip: testSnippetRoundtrip(),
+    snippetLimits: testSnippetLimits(),
     compressionRoundtrip: await testCompressionRoundtrip(),
     compressionSkips: await testCompressionSkipsSmallAndPrecompressed(),
     compressionIncompressible: await testCompressionIncompressibleFallback(),
