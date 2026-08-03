@@ -69,6 +69,69 @@ export async function testCodecRoundtrip() {
   return pass
 }
 
+// Gzip-compressed codec roundtrip: the encoder carries compressed bytes with
+// the original size and hash in metadata; reconstructFile() must gunzip and
+// verify() must hash the ORIGINAL bytes (end-to-end, not the wire stream).
+export async function testCodecRoundtripCompressed() {
+  const { createEncoder } = await import('./encoder.js')
+  const { maybeCompress } = await import('./shared/compression.js')
+
+  // Highly compressible so maybeCompress actually engages.
+  const originalData = new Uint8Array(3000)
+  for (let i = 0; i < originalData.length; i++) {
+    originalData[i] = i % 8
+  }
+
+  const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', originalData))
+  const { bytes: wireBytes, compressed } = await maybeCompress(originalData, 'text/plain')
+  if (!compressed) {
+    console.log('Compressed codec roundtrip test: FAIL - setup, payload did not compress')
+    return false
+  }
+
+  const encoder = createEncoder(wireBytes.buffer, 'compressed.txt', 'text/plain', hash, 200, undefined, {
+    compressed: true,
+    originalSize: originalData.length
+  })
+  const decoder = createDecoder()
+
+  const symbolCount = Math.ceil(encoder.K_prime * 1.5) + 2
+  decoder.receive(encoder.generateSymbol(0))
+  for (let id = 1; id <= symbolCount && !decoder.isComplete(); id++) {
+    decoder.receive(encoder.generateSymbol(id))
+  }
+
+  if (!decoder.isComplete()) {
+    console.log('Compressed codec roundtrip test: FAIL - incomplete after', decoder.uniqueSymbols, 'symbols')
+    return false
+  }
+
+  // The raw reconstruction is the wire stream (compressed bytes)…
+  const wire = decoder.reconstruct()
+  const wireOk = wire !== null && wire.length === wireBytes.length
+
+  // …and reconstructFile() is the original.
+  const restored = await decoder.reconstructFile()
+  let dataMatch = restored !== null && restored.length === originalData.length
+  if (dataMatch) {
+    for (let i = 0; i < originalData.length; i++) {
+      if (restored[i] !== originalData[i]) { dataMatch = false; break }
+    }
+  }
+
+  const verified = await decoder.verify()
+
+  const pass = wireOk && dataMatch && verified
+  console.log('Compressed codec roundtrip test:', pass ? 'PASS' : 'FAIL', {
+    wireOk,
+    dataMatch,
+    verified,
+    originalLen: originalData.length,
+    wireLen: wireBytes.length
+  })
+  return pass
+}
+
 // Codec roundtrip with deliberate symbol loss — exercises the GF(2) tail solver.
 // We drop a handful of systematic symbols (so the decoder stalls with a small
 // residual set of unknown source blocks) and rely on fountain symbols plus

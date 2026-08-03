@@ -4,6 +4,7 @@ import { formatBytes, formatTime } from '../format.js'
 import { playBeep, announce } from '../feedback.js'
 import { confirmDialog } from '../confirm-dialog.js'
 import { triggerBlobDownload } from '../shared/download.js'
+import { acquireWakeLock, releaseWakeLock } from '../shared/wake-lock.js'
 import { isMobileUA, listVideoInputs, populateCameraSelect, nextCamera } from '../shared/camera.js'
 
 // Receiver state
@@ -167,6 +168,7 @@ async function refreshCameraControls() {
 }
 
 function stopCamera() {
+  releaseWakeLock()
   if (state.stream) {
     state.stream.getTracks().forEach(track => track.stop())
     state.stream = null
@@ -425,6 +427,7 @@ function handleFileComplete(fileId) {
   if (!Module) return
 
   state.isScanning = false
+  releaseWakeLock()
   state.fileId = fileId
   state.fileComplete = true
   state.fileDownloaded = false
@@ -483,6 +486,7 @@ export function hasPendingDownload() {
 
 function startScanning() {
   state.isScanning = true
+  void acquireWakeLock()
   state.frameCount = 0
   state.recentDecode = -1
   state.recentExtract = -1

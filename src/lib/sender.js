@@ -1,9 +1,11 @@
 // Sender module - handles file encoding and QR display
-import qrcode from 'qrcode-generator'
-import { MAX_FILE_SIZE, METADATA_INTERVAL, DATA_PRESETS, SIZE_PRESETS, SPEED_PRESETS, QR_MODE, MODE_MARGIN_RATIOS, PATCH_SIZE_RATIO, PATCH_GAP_RATIO } from './constants.js'
+import { getQRModules } from './qr-modules.js'
+import { MAX_FILE_SIZE, METADATA_INTERVAL, DATA_PRESETS, MAX_COLOR_DATA_PRESET, SIZE_PRESETS, SPEED_PRESETS, QR_MODE, MODE_MARGIN_RATIOS, PATCH_SIZE_RATIO, PATCH_GAP_RATIO } from './constants.js'
 import { createPacket } from './packet.js'
 import { PALETTE_RGB } from './color/palette.js'
 import { wireDropZone } from './shared/dropzone.js'
+import { acquireWakeLock, releaseWakeLock } from './shared/wake-lock.js'
+import { maybeCompress } from './shared/compression.js'
 import { createEncoder } from './encoder.js'
 import { formatBytes } from './format.js'
 import { announce, flashHighlight } from './feedback.js'
@@ -11,10 +13,12 @@ import { announce, flashHighlight } from './feedback.js'
 // Sender state
 const state = {
   encoder: null,
-  fileBuffer: null,
+  fileBuffer: null, // wire bytes: gzipped when `compressed`, else the original
   fileName: null,
   mimeType: null,
-  fileHash: null,
+  fileHash: null, // SHA-256 of the ORIGINAL bytes, end-to-end
+  originalSize: 0,
+  compressed: false,
   intervalId: null,
   symbolId: 1,
   isPaused: false,
@@ -71,22 +75,6 @@ function isFinderOrTiming(row, col, size) {
         col >= alignPos - 2 && col <= alignPos + 2) return true
   }
   return false
-}
-
-// Get QR modules from base64 data
-function getQRModules(base64Data, eccLevel) {
-  const qr = qrcode(0, eccLevel)
-  qr.addData(base64Data)
-  qr.make()
-  const count = qr.getModuleCount()
-  const modules = []
-  for (let r = 0; r < count; r++) {
-    modules[r] = []
-    for (let c = 0; c < count; c++) {
-      modules[r][c] = qr.isDark(r, c) ? 1 : 0
-    }
-  }
-  return { modules, count }
 }
 
 // Get patch position for Palette mode calibration (proportional to margin)
@@ -177,14 +165,11 @@ function renderSymbolBW(symbolId) {
   const sizePreset = SIZE_PRESETS[parseInt(elements.sizeSlider.value)]
 
   const packet = state.encoder.generateSymbol(symbolId)
-  const base64 = btoa(String.fromCharCode.apply(null, packet))
 
-  // Use dynamic ECC from preset
-  const qr = qrcode(0, dataPreset.ecc)
-  qr.addData(base64)
-  qr.make()
+  // Raw packet bytes in byte mode, ECC from preset, pinned mask
+  const qr = getQRModules(packet, dataPreset.ecc)
 
-  const moduleCount = qr.getModuleCount()
+  const moduleCount = qr.count
   // Scale to fit within preset size
   const cellSize = Math.floor(sizePreset.size / moduleCount)
   const actualSize = moduleCount * cellSize
@@ -209,6 +194,7 @@ function renderSymbolBW(symbolId) {
   }
 }
 
+
 // Render 3 symbols as color QR (PCCC or Palette mode)
 function renderSymbolsColor(symbolIds) {
   const dataPreset = DATA_PRESETS[parseInt(elements.dataSlider.value)]
@@ -222,12 +208,10 @@ function renderSymbolsColor(symbolIds) {
   const qrSize = Math.round(canvasSize / (1 + 2 * marginRatio))
   const margin = Math.round((canvasSize - qrSize) / 2)
 
-  // Generate packets for all 3 channels
+  // Generate packets for all 3 channels — raw bytes, byte mode. Same
+  // blockSize + ECC + pinned mask means identical geometry across channels.
   const packets = symbolIds.map(id => state.encoder.generateSymbol(id))
-  const base64s = packets.map(p => btoa(String.fromCharCode.apply(null, p)))
-
-  // Get QR modules for each channel
-  const qrModules = base64s.map(b64 => getQRModules(b64, dataPreset.ecc))
+  const qrModules = packets.map(p => getQRModules(p, dataPreset.ecc))
   const moduleCount = qrModules[0].count
   const cellSize = qrSize / moduleCount
 
@@ -246,9 +230,9 @@ function renderSymbolsColor(symbolIds) {
   // Draw QR code with color encoding
   for (let row = 0; row < moduleCount; row++) {
     for (let col = 0; col < moduleCount; col++) {
-      const ch0 = qrModules[0].modules[row][col]
-      const ch1 = qrModules[1].modules[row][col]
-      const ch2 = qrModules[2].modules[row][col]
+      const ch0 = qrModules[0].isDark(row, col) ? 1 : 0
+      const ch1 = qrModules[1].isDark(row, col) ? 1 : 0
+      const ch2 = qrModules[2].isDark(row, col) ? 1 : 0
 
       let rgb
       if (isFinderOrTiming(row, col, moduleCount)) {
@@ -333,6 +317,7 @@ function startSending() {
 
   state.isPaused = false
   state.isSending = true
+  void acquireWakeLock()
   updateActionButton()
 
   // Disable data, size sliders, and mode selector during transmission
@@ -351,6 +336,7 @@ function startSending() {
 // Pause sending
 function pauseSending() {
   state.isPaused = true
+  releaseWakeLock()
   clearInterval(state.intervalId)
   state.intervalId = null
   updateActionButton()
@@ -359,6 +345,7 @@ function pauseSending() {
 // Resume sending
 function resumeSending() {
   state.isPaused = false
+  void acquireWakeLock()
   updateActionButton()
 
   // Resume interval using speed preset
@@ -368,6 +355,7 @@ function resumeSending() {
 
 // Stop sending and reset
 function stopSending() {
+  releaseWakeLock()
   if (state.intervalId) {
     clearInterval(state.intervalId)
     state.intervalId = null
@@ -377,6 +365,8 @@ function stopSending() {
   state.fileName = null
   state.mimeType = null
   state.fileHash = null
+  state.originalSize = 0
+  state.compressed = false
   state.isPaused = false
   state.isSending = false
   state.symbolId = 1
@@ -421,17 +411,25 @@ async function processFile(file) {
 
   try {
     const buffer = await file.arrayBuffer()
+    // Hash the ORIGINAL bytes — the receiver verifies end-to-end after any
+    // decompression, so the hash must not describe the wire stream.
     const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', buffer))
+    const { bytes: wireBytes, compressed } = await maybeCompress(new Uint8Array(buffer), file.type || '')
 
-    // Store file data for re-encoding on preset change
-    state.fileBuffer = buffer
+    // Store (possibly gzipped) wire data for re-encoding on preset change
+    state.fileBuffer = wireBytes.buffer
     state.fileName = file.name
     state.mimeType = file.type || 'application/octet-stream'
     state.fileHash = hash
+    state.originalSize = buffer.byteLength
+    state.compressed = compressed
 
     const dataIndex = parseInt(elements.dataSlider.value)
     const blockSize = DATA_PRESETS[dataIndex].blockSize
-    state.encoder = createEncoder(buffer, file.name, state.mimeType, hash, blockSize, state.mode)
+    state.encoder = createEncoder(state.fileBuffer, file.name, state.mimeType, hash, blockSize, state.mode, {
+      compressed,
+      originalSize: buffer.byteLength
+    })
     state.symbolId = 1
     state.frameCount = 0
     state.isPaused = false
@@ -454,6 +452,11 @@ async function processFile(file) {
 // Handle file selection
 // Handle data preset change
 function handleDataPresetChange() {
+  // Ultra/Insane are BW-only — clamp the slider back in color modes.
+  if (state.mode !== QR_MODE.BW && parseInt(elements.dataSlider.value) > MAX_COLOR_DATA_PRESET) {
+    elements.dataSlider.value = MAX_COLOR_DATA_PRESET
+    announce('Preset limited to ' + DATA_PRESETS[MAX_COLOR_DATA_PRESET].name + ' in color modes')
+  }
   const index = parseInt(elements.dataSlider.value)
   const preset = DATA_PRESETS[index]
   const label = preset.name + ' (' + preset.blockSize + 'B)'
@@ -468,11 +471,12 @@ function handleDataPresetChange() {
       state.mimeType,
       state.fileHash,
       preset.blockSize,
-      state.mode
+      state.mode,
+      { compressed: state.compressed, originalSize: state.originalSize }
     )
     state.symbolId = 1
     state.frameCount = 0
-    elements.fileInfo.textContent = state.fileName + ' (' + formatBytes(state.fileBuffer.byteLength) + ', ' + state.encoder.K + ' blocks' + getModeLabel(state.mode) + ')'
+    elements.fileInfo.textContent = state.fileName + ' (' + formatBytes(state.originalSize) + ', ' + state.encoder.K + ' blocks' + getModeLabel(state.mode) + ')'
     renderSymbol(0)
   }
 }
@@ -542,11 +546,12 @@ function handleModeChange(newMode) {
       state.mimeType,
       state.fileHash,
       blockSize,
-      state.mode
+      state.mode,
+      { compressed: state.compressed, originalSize: state.originalSize }
     )
     state.symbolId = 1
     state.frameCount = 0
-    elements.fileInfo.textContent = state.fileName + ' (' + formatBytes(state.fileBuffer.byteLength) + ', ' + state.encoder.K + ' blocks' + getModeLabel(state.mode) + ')'
+    elements.fileInfo.textContent = state.fileName + ' (' + formatBytes(state.originalSize) + ', ' + state.encoder.K + ' blocks' + getModeLabel(state.mode) + ')'
     renderSymbol(0)
   }
 }

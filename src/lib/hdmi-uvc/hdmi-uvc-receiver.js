@@ -99,6 +99,7 @@ import {
   CAPTURE_BENCHMARK_SAMPLES_PER_METHOD
 } from './hdmi-uvc-receiver-state.js'
 import { triggerBlobDownload } from '../shared/download.js'
+import { acquireWakeLock, releaseWakeLock } from '../shared/wake-lock.js'
 import { listVideoInputs, populateCameraSelect } from '../shared/camera.js'
 import {
   applyArqReceiverHelperStatus,
@@ -1033,7 +1034,7 @@ function createWorkerDecoderShadow() {
     noteFrameBoundary() {
       postToWorker({ type: 'noteFrameBoundary' })
     },
-    reconstruct() {
+    reconstructFile() {
       const id = receiverWorkerNextId++
       return new Promise((resolve, reject) => {
         receiverWorkerReconstructPending.set(id, {
@@ -3784,15 +3785,17 @@ async function handleComplete() {
   state.completionStarted = true
 
   state.isScanning = false
+  releaseWakeLock()
 
   cancelNextFrame()
 
   const decoder = state.decoder
   const meta = decoder.metadata
 
-  // In worker mode reconstruct() returns a Promise; awaiting a non-Promise
-  // value is a no-op, so this handles both the main-thread and worker paths.
-  const fileData = await decoder.reconstruct()
+  // Both paths inflate gzip-compressed streams: the worker proxy forwards to
+  // the worker-side decoder's reconstructFile(), the main-thread decoder has
+  // it natively. The SHA-256 below therefore checks the ORIGINAL bytes.
+  const fileData = await decoder.reconstructFile()
   if (!fileData) {
     state.completionStarted = false
     state.isScanning = true
@@ -3859,6 +3862,7 @@ function cancelNextFrame() {
 
 function resetReceiver() {
   state.isScanning = false
+  releaseWakeLock()
   stopWorkerCapture()
 
   cancelNextFrame()
@@ -3914,6 +3918,7 @@ function resetReceiver() {
 
 function startScanning() {
   state.isScanning = true
+  void acquireWakeLock()
   initReceiverWorker()
   // Worker-capture modes take over (or intercept) the frame pump. Attempt
   // the handoff here; if the worker isn't ready yet, the start function

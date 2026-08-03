@@ -8,7 +8,11 @@ import { createMetadataPayload } from './metadata.js'
 import { calculateParityParams, generateParityMap, generateParityBlocks } from './precode.js'
 
 export function createEncoder(fileData, filename, mimeType, hash, blockSize = 200, mode = QR_MODE.BW, options = {}) {
-  const { noRedundancy = false } = options
+  // When `compressed`, fileData is the gzipped wire payload and `originalSize`
+  // is the pre-compression byte count; metadata carries both so the receiver
+  // can trim the wire stream (transmittedSize) and bound/verify the inflated
+  // file (fileSize + hash, which stay end-to-end on the ORIGINAL bytes).
+  const { noRedundancy = false, compressed = false, originalSize: originalSizeOption } = options
   // Pad file to multiple of blockSize
   const paddedSize = Math.ceil(fileData.byteLength / blockSize) * blockSize
   const paddedData = new Uint8Array(paddedSize)
@@ -16,7 +20,8 @@ export function createEncoder(fileData, filename, mimeType, hash, blockSize = 20
 
   const K = paddedSize / blockSize // Source block count
   const fileId = (Math.random() * 0xFFFFFFFF) >>> 0
-  const originalSize = fileData.byteLength
+  const originalSize = originalSizeOption ?? fileData.byteLength
+  const transmittedSize = fileData.byteLength
 
   // Split into source blocks
   const sourceBlocks = []
@@ -43,7 +48,9 @@ export function createEncoder(fileData, filename, mimeType, hash, blockSize = 20
     // Include K so receiver can derive parity parameters, and mode for redundancy.
     const rawMetadata = createMetadataPayload(filename, mimeType, originalSize, hash, K, mode, {
       noRedundancy,
-      repairIdle: !!options.repairIdle
+      repairIdle: !!options.repairIdle,
+      compressed,
+      transmittedSize
     })
     const metadataPayload = new Uint8Array(blockSize)
     metadataPayload.set(rawMetadata)
@@ -53,7 +60,7 @@ export function createEncoder(fileData, filename, mimeType, hash, blockSize = 20
   // Fail at create time (catchable by file-selection error handling) instead
   // of throwing RangeError on the first metadata frame of the render loop.
   {
-    const metadataLength = createMetadataPayload(filename, mimeType, originalSize, hash, K, mode, { noRedundancy }).length
+    const metadataLength = createMetadataPayload(filename, mimeType, originalSize, hash, K, mode, { noRedundancy, compressed, transmittedSize }).length
     if (metadataLength > blockSize) {
       throw new Error(
         `File metadata (${metadataLength} bytes) exceeds block size (${blockSize} bytes) - ` +

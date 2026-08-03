@@ -7,6 +7,7 @@ import { parsePacket } from './packet.js'
 import { parseMetadataPayload } from './metadata.js'
 import { calculateParityParams, generateParityMap, buildSourceToParityAdjacency } from './precode.js'
 import { solveGF2 } from './gf2-solver.js'
+import { decompressWithLimit } from './shared/compression.js'
 
 export const TAIL_SOLVER_MISSING_LIMIT = 192
 const TAIL_SOLVER_STALL_FRAME_THRESHOLD = 30
@@ -577,20 +578,39 @@ export function createDecoder() {
     reconstruct() {
       if (!this.isComplete()) return null
 
-      // Concatenate source blocks (first K) and trim to original size
-      const result = new Uint8Array(metadata.fileSize)
+      // Concatenate source blocks (first K) and trim to the wire size — the
+      // gzipped byte count when the stream is compressed, the file size
+      // otherwise (old metadata frames parse with transmittedSize = fileSize).
+      const wireSize = metadata.transmittedSize ?? metadata.fileSize
+      const result = new Uint8Array(wireSize)
       for (let i = 0; i < K; i++) {
         const block = decodedBlocks[i]
         const start = i * blockSize
-        const end = Math.min(start + blockSize, metadata.fileSize)
+        const end = Math.min(start + blockSize, wireSize)
+        if (end <= start) break
         result.set(block.subarray(0, end - start), start)
       }
 
       return result
     },
 
+    // The original file bytes: reconstruct() is the wire stream, this inflates
+    // it when the sender compressed. fileSize bounds the inflation — the gzip
+    // trailer's declared size arrived over the air and is not trusted.
+    async reconstructFile() {
+      const wire = this.reconstruct()
+      if (!wire) return null
+      if (!metadata.compressed) return wire
+      return decompressWithLimit(wire, metadata.fileSize)
+    },
+
     async verify() {
-      const data = this.reconstruct()
+      let data
+      try {
+        data = await this.reconstructFile()
+      } catch {
+        return false // corrupt or oversized gzip stream is a failed transfer
+      }
       if (!data) return false
 
       const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', data))

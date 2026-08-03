@@ -213,15 +213,17 @@ function handleNoteFrameBoundary(msg) {
   return reply
 }
 
-function handleReconstruct(msg) {
+async function handleReconstruct(msg) {
   try {
     const d = ensureDecoder()
-    const data = typeof d.reconstruct === 'function' ? d.reconstruct() : null
+    // reconstructFile() inflates gzip-compressed streams (decompression runs
+    // here in the worker); plain streams come back as-is.
+    const data = typeof d.reconstructFile === 'function' ? await d.reconstructFile() : null
     if (!data) {
       return {
         type: 'reconstructResult',
         id: msg.id,
-        error: 'Worker decoder has no reconstruct() or returned null'
+        error: 'Worker decoder has no reconstructFile() or returned null'
       }
     }
     // Transfer the backing buffer so the main thread gets it zero-copy.
@@ -655,9 +657,13 @@ self.onmessage = (event) => {
         reply = handleNoteFrameBoundary(msg)
         break
       case 'reconstruct': {
-        const res = handleReconstruct(msg)
-        if (res.reply) { reply = res.reply; transfer = res.transfer }
-        else reply = res
+        // Async (gzip inflation) — posts its own reply instead of using the
+        // shared post below. handleReconstruct never rejects: its body is one
+        // try/catch that returns an error reply.
+        handleReconstruct(msg).then((res) => {
+          if (res.reply) self.postMessage(res.reply, res.transfer || [])
+          else self.postMessage(res)
+        })
         break
       }
       case 'startCaptureWithTrack':

@@ -9,11 +9,21 @@ import { testPaletteOrderingsConsistent } from './lib/color/palette.tests.js'
 import { testModeProfileTable } from './lib/hdmi-uvc/hdmi-uvc-constants.tests.js'
 import { testPacketRoundtrip } from './lib/packet.js'
 import { testXorBytesInto } from './lib/xor.js'
-import { testMetadataRoundtrip, testMetadataNoRedundancyFlag, testMetadataRepairIdleFlag } from './lib/metadata.js'
+import { testMetadataRoundtrip, testMetadataNoRedundancyFlag, testMetadataRepairIdleFlag, testMetadataCompressionFlag } from './lib/metadata.js'
+import { testWakeLockStateMachine, testWakeLockSurvivesMissingApi } from './lib/shared/wake-lock.tests.js'
+import { testQrModulesBinaryRoundtrip, testQrModulesStableGeometry } from './lib/qr-modules.tests.js'
+import { testDecodeWorkerPoolSubmitAndDrain, testDecodeWorkerPoolResize } from './lib/shared/decode-worker-pool.tests.js'
+import {
+  testCompressionRoundtrip,
+  testCompressionSkipsSmallAndPrecompressed,
+  testCompressionIncompressibleFallback,
+  testDecompressCeilingAborts
+} from './lib/shared/compression.tests.js'
 import { testEncoder, testEncoderNoRedundancy } from './lib/encoder.js'
 import { testFountainRippleVariant } from './lib/fountain-symbol.js'
 import {
   testCodecRoundtrip,
+  testCodecRoundtripCompressed,
   testCodecRoundtripWithLoss,
   testCodecRoundtripDeferredMetadata,
   testCodecRoundtripNoRedundancy,
@@ -234,12 +244,24 @@ export function registerAllTests() {
   window.testPacketRoundtrip = testPacketRoundtrip
   window.testXorBytesInto = testXorBytesInto
   window.testMetadataRoundtrip = testMetadataRoundtrip
+  window.testWakeLockStateMachine = testWakeLockStateMachine
+  window.testWakeLockSurvivesMissingApi = testWakeLockSurvivesMissingApi
+  window.testQrModulesBinaryRoundtrip = testQrModulesBinaryRoundtrip
+  window.testQrModulesStableGeometry = testQrModulesStableGeometry
+  window.testDecodeWorkerPoolSubmitAndDrain = testDecodeWorkerPoolSubmitAndDrain
+  window.testDecodeWorkerPoolResize = testDecodeWorkerPoolResize
+  window.testCompressionRoundtrip = testCompressionRoundtrip
+  window.testCompressionSkipsSmallAndPrecompressed = testCompressionSkipsSmallAndPrecompressed
+  window.testCompressionIncompressibleFallback = testCompressionIncompressibleFallback
+  window.testDecompressCeilingAborts = testDecompressCeilingAborts
   window.testMetadataNoRedundancyFlag = testMetadataNoRedundancyFlag
   window.testMetadataRepairIdleFlag = testMetadataRepairIdleFlag
+  window.testMetadataCompressionFlag = testMetadataCompressionFlag
   window.testEncoder = testEncoder
   window.testEncoderNoRedundancy = testEncoderNoRedundancy
   window.testFountainRippleVariant = testFountainRippleVariant
   window.testCodecRoundtrip = testCodecRoundtrip
+  window.testCodecRoundtripCompressed = testCodecRoundtripCompressed
   window.testCodecRoundtripWithLoss = testCodecRoundtripWithLoss
   window.testCodecRoundtripDeferredMetadata = testCodecRoundtripDeferredMetadata
   window.testCodecRoundtripNoRedundancy = testCodecRoundtripNoRedundancy
@@ -486,6 +508,17 @@ export async function runAllTests() {
     metadata: testMetadataRoundtrip(),
     metadataNoRedundancy: testMetadataNoRedundancyFlag(),
     metadataRepairIdle: testMetadataRepairIdleFlag(),
+    metadataCompression: testMetadataCompressionFlag(),
+    wakeLockStateMachine: await testWakeLockStateMachine(),
+    wakeLockMissingApi: await testWakeLockSurvivesMissingApi(),
+    qrModulesBinaryRoundtrip: testQrModulesBinaryRoundtrip(),
+    qrModulesStableGeometry: testQrModulesStableGeometry(),
+    decodeWorkerPoolSubmitDrain: testDecodeWorkerPoolSubmitAndDrain(),
+    decodeWorkerPoolResize: testDecodeWorkerPoolResize(),
+    compressionRoundtrip: await testCompressionRoundtrip(),
+    compressionSkips: await testCompressionSkipsSmallAndPrecompressed(),
+    compressionIncompressible: await testCompressionIncompressibleFallback(),
+    decompressCeiling: await testDecompressCeilingAborts(),
     parityMap: testParityMap(),
     parityRecovery: testParityRecovery(),
     srcParityAdj: testSourceToParityAdjacency(),
@@ -495,6 +528,7 @@ export async function runAllTests() {
     encoderNoRedundancy: await testEncoderNoRedundancy(),
     fountainRippleVariant: testFountainRippleVariant(),
     codec: await testCodecRoundtrip(),
+    codecCompressed: await testCodecRoundtripCompressed(),
     codecWithLoss: await testCodecRoundtripWithLoss(),
     codecDeferredMetadata: await testCodecRoundtripDeferredMetadata(),
     codecNoRedundancy: await testCodecRoundtripNoRedundancy(),
