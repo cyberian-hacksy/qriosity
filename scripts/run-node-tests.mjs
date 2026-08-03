@@ -41,7 +41,8 @@ const SUITES = [
   ]],
   ['../src/lib/shared/snippet.tests.js', ['testSnippetRoundtrip', 'testSnippetLimits']],
   ['../src/lib/shared/decode-worker-pool.tests.js', [
-    'testDecodeWorkerPoolSubmitAndDrain', 'testDecodeWorkerPoolResize'
+    'testDecodeWorkerPoolSubmitAndDrain', 'testDecodeWorkerPoolResize',
+    'testDecodeWorkerPoolWorkerFailure', 'testDecodeWorkerPoolJamDetector'
   ]]
 ]
 

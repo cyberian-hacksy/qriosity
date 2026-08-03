@@ -13,7 +13,7 @@ import { testMetadataRoundtrip, testMetadataNoRedundancyFlag, testMetadataRepair
 import { testWakeLockStateMachine, testWakeLockSurvivesMissingApi } from './lib/shared/wake-lock.tests.js'
 import { testQrModulesBinaryRoundtrip, testQrModulesStableGeometry } from './lib/qr-modules.tests.js'
 import { testGoldenPacket, testGoldenMetadata, testGoldenSymbolIndices, testGoldenQrMatrix, testGoldenGzipDecode } from './lib/golden-vectors.tests.js'
-import { testDecodeWorkerPoolSubmitAndDrain, testDecodeWorkerPoolResize } from './lib/shared/decode-worker-pool.tests.js'
+import { testDecodeWorkerPoolSubmitAndDrain, testDecodeWorkerPoolResize, testDecodeWorkerPoolWorkerFailure, testDecodeWorkerPoolJamDetector } from './lib/shared/decode-worker-pool.tests.js'
 import { testNoSignalHintLifecycle, testNoSignalHintEndsOnDecode } from './lib/shared/no-signal.tests.js'
 import { testSafeFileName } from './lib/shared/download.tests.js'
 import { testProgressMonotonicAndBounded, testProgressMovesWhileSolvedStalls, testEtaBehaviour } from './lib/shared/transfer-progress.tests.js'
@@ -260,6 +260,8 @@ export function registerAllTests() {
   window.testGoldenGzipDecode = testGoldenGzipDecode
   window.testDecodeWorkerPoolSubmitAndDrain = testDecodeWorkerPoolSubmitAndDrain
   window.testDecodeWorkerPoolResize = testDecodeWorkerPoolResize
+  window.testDecodeWorkerPoolWorkerFailure = testDecodeWorkerPoolWorkerFailure
+  window.testDecodeWorkerPoolJamDetector = testDecodeWorkerPoolJamDetector
   window.testNoSignalHintLifecycle = testNoSignalHintLifecycle
   window.testNoSignalHintEndsOnDecode = testNoSignalHintEndsOnDecode
   window.testSafeFileName = testSafeFileName
@@ -538,6 +540,8 @@ export async function runAllTests() {
     goldenGzipDecode: await testGoldenGzipDecode(),
     decodeWorkerPoolSubmitDrain: testDecodeWorkerPoolSubmitAndDrain(),
     decodeWorkerPoolResize: testDecodeWorkerPoolResize(),
+    decodeWorkerPoolWorkerFailure: testDecodeWorkerPoolWorkerFailure(),
+    decodeWorkerPoolJamDetector: testDecodeWorkerPoolJamDetector(),
     noSignalHintLifecycle: testNoSignalHintLifecycle(),
     noSignalHintEndsOnDecode: testNoSignalHintEndsOnDecode(),
     safeFileName: testSafeFileName(),

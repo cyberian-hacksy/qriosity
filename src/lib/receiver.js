@@ -1,7 +1,7 @@
 // Receiver module - handles camera scanning and QR decoding
 import jsQR from 'jsqr'
 import QrDecodeWorker from './qr-decode-worker.js?worker&inline'
-import { DecodeWorkerPool } from './shared/decode-worker-pool.js'
+import { DecodeWorkerPool, createJamDetector } from './shared/decode-worker-pool.js'
 import { createDecoder } from './decoder.js'
 import { packetModeFromFlags } from './packet.js'
 import { QR_MODE } from './constants.js'
@@ -440,9 +440,33 @@ let zxingPool = null
 let zxingStatus = 'unknown' // 'unknown' | 'ready' | 'unavailable'
 let zxingFrameId = 0
 let zxingCrop = null // latest crop geometry for the overlay in the async callback
+let zxingInitTimer = null
+let zxingJammed = null
+const ZXING_INIT_TIMEOUT_MS = 10_000
+const ZXING_JAM_TIMEOUT_MS = 4000
 
 function zxingAvailable() {
   return zxingPool !== null && zxingStatus !== 'unavailable'
+}
+
+// Give up on the worker pool and let the jsQR fallback take over. Reached
+// from every failure signal: an explicit wasm-load-failed reply, a worker
+// error event, an init that never answered, or a saturated pool that stopped
+// replying. Workers can die without a single message (e.g. the worker script
+// request itself fails), which used to leave the status stuck at 'unknown'
+// and the receiver permanently blind with no fallback.
+function markZxingUnavailable(reason) {
+  if (zxingStatus === 'unavailable') return
+  zxingStatus = 'unavailable'
+  console.warn('zxing pool unavailable (' + reason + ') — using jsQR fallback')
+  if (zxingInitTimer) {
+    clearTimeout(zxingInitTimer)
+    zxingInitTimer = null
+  }
+  if (zxingPool) {
+    zxingPool.resize(0)
+    zxingPool = null
+  }
 }
 
 function createZxingWorker() {
@@ -454,12 +478,12 @@ function createZxingWorker() {
     worker.removeEventListener('message', onFirst)
     if (event.data.ready) {
       zxingStatus = 'ready'
-    } else if (zxingStatus !== 'ready') {
-      zxingStatus = 'unavailable'
-      if (zxingPool) {
-        zxingPool.resize(0)
-        zxingPool = null
+      if (zxingInitTimer) {
+        clearTimeout(zxingInitTimer)
+        zxingInitTimer = null
       }
+    } else if (zxingStatus !== 'ready') {
+      markZxingUnavailable('wasm failed to load')
     }
   }
   worker.addEventListener('message', onFirst)
@@ -472,11 +496,26 @@ function createZxingWorker() {
 
 function initZxingPool() {
   if (zxingPool || zxingStatus === 'unavailable') return
-  zxingPool = new DecodeWorkerPool(createZxingWorker, onZxingDecoded)
+  zxingPool = new DecodeWorkerPool(createZxingWorker, onZxingDecoded,
+    () => markZxingUnavailable('worker died'))
+  zxingJammed = createJamDetector(ZXING_JAM_TIMEOUT_MS)
+  // 'unknown' counts as available and blocks the jsQR fallback, so it must
+  // not be a state the receiver can sit in forever.
+  if (zxingStatus === 'unknown' && !zxingInitTimer) {
+    zxingInitTimer = setTimeout(() => {
+      zxingInitTimer = null
+      if (zxingStatus === 'unknown') markZxingUnavailable('init timeout')
+    }, ZXING_INIT_TIMEOUT_MS)
+  }
   zxingPool.resize(Math.min(3, Math.max(1, (navigator.hardwareConcurrency || 4) - 2)))
 }
 
 function teardownZxingPool() {
+  if (zxingInitTimer) {
+    clearTimeout(zxingInitTimer)
+    zxingInitTimer = null
+  }
+  zxingJammed = null
   if (!zxingPool) return
   // Each worker holds a ~941 KB WASM instance — reclaim it between transfers.
   zxingPool.resize(0)
@@ -576,9 +615,17 @@ function scanFrame() {
     // decode results (and completion) arrive via onZxingDecoded. Skips the
     // main-thread grayscale pass and jsQR call entirely.
     if (effectiveMode === QR_MODE.BW && zxingAvailable()) {
-      submitFrameToZxing(imageData, size, video, offsetX, offsetY)
-      state.animationId = requestAnimationFrame(scanFrame)
-      return
+      // Dead workers never reply, so submits saturate the pool and detection
+      // silently flatlines while the camera keeps delivering. Treat a
+      // saturated pool that has stopped replying as worker death and decode
+      // this same frame with jsQR below.
+      if (zxingJammed && zxingJammed(zxingPool.busyCount, zxingPool.size, performance.now())) {
+        markZxingUnavailable('pool stopped replying')
+      } else {
+        submitFrameToZxing(imageData, size, video, offsetX, offsetY)
+        state.animationId = requestAnimationFrame(scanFrame)
+        return
+      }
     }
 
     // Convert to grayscale for QR detection (try both inversions for better detection)

@@ -9,10 +9,31 @@
 // is also how a receiver reclaims that memory the moment the transfer ends:
 // resize(0).
 
+// Detects a silently-jammed pool: every slot busy with no replies for
+// `timeoutMs`. A healthy worker answers a frame in tens of milliseconds, so a
+// pool that stays saturated for seconds is dead (e.g. its workers' module
+// fetch failed) — callers should tear it down and fall back. Returns a
+// `(busyCount, size, nowMs) => boolean` to call once per submitted frame.
+export function createJamDetector(timeoutMs) {
+  let allBusySince = null
+  return (busyCount, size, nowMs) => {
+    if (size === 0 || busyCount < size) {
+      allBusySince = null
+      return false
+    }
+    if (allBusySince === null) {
+      allBusySince = nowMs
+      return false
+    }
+    return nowMs - allBusySince >= timeoutMs
+  }
+}
+
 export class DecodeWorkerPool {
-  constructor(createWorker, onDecoded) {
+  constructor(createWorker, onDecoded, onWorkerFailure = null) {
     this.createWorker = createWorker
     this.onDecoded = onDecoded
+    this.onWorkerFailure = onWorkerFailure
     this.workers = []
     this.busy = []
   }
@@ -43,6 +64,15 @@ export class DecodeWorkerPool {
         // (e.g. the QR position for the detection overlay).
         if (bytes) this.onDecoded(bytes, event.data)
       }
+      // A worker whose script fails to load (or that dies mid-decode) never
+      // posts a reply — without these handlers its slot would stay busy
+      // forever and the pool would silently starve.
+      const fail = () => {
+        this.busy[slot] = false
+        if (this.onWorkerFailure) this.onWorkerFailure(slot)
+      }
+      worker.onerror = fail
+      worker.onmessageerror = fail
       this.workers.push(worker)
       this.busy.push(false)
     }

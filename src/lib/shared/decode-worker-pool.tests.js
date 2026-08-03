@@ -1,7 +1,7 @@
 // Tests for the fixed-slot decode worker pool, driven by fake workers so the
 // slot-identity rules are checkable without real Workers or WASM.
 
-import { DecodeWorkerPool } from './decode-worker-pool.js'
+import { DecodeWorkerPool, createJamDetector } from './decode-worker-pool.js'
 
 function makeFakeWorkerFactory() {
   const workers = []
@@ -53,6 +53,68 @@ export function testDecodeWorkerPoolSubmitAndDrain() {
   const pass = twoWorkers && saturation && drained && nullFreed && warmupIgnored
   console.log('Decode worker pool submit/drain test:', pass ? 'PASS' : 'FAIL',
     { twoWorkers, saturation, drained, nullFreed, warmupIgnored })
+  return pass
+}
+
+export function testDecodeWorkerPoolWorkerFailure() {
+  const factory = makeFakeWorkerFactory()
+  const failures = []
+  const pool = new DecodeWorkerPool(factory.create, () => {}, (slot) => failures.push(slot))
+  pool.resize(2)
+
+  // The pool must install error handlers on every worker it creates — a
+  // worker whose module fetch 504s dies without ever posting a message.
+  const handlersInstalled = typeof factory.workers[0].onerror === 'function' &&
+    typeof factory.workers[0].onmessageerror === 'function'
+
+  // A dying worker frees its slot and reports the failure; otherwise the
+  // slot stays busy forever and the pool silently goes blind.
+  pool.submit({ id: 1 }, [])
+  pool.submit({ id: 2 }, [])
+  factory.workers[0].onerror?.({ message: 'boom' })
+  const slotFreed = pool.busyCount === 1 && failures.length === 1 && failures[0] === 0
+
+  // messageerror (undeliverable reply) gets the same treatment.
+  factory.workers[1].onmessageerror?.({})
+  const msgErrFreed = pool.busyCount === 0 && failures.length === 2 && failures[1] === 1
+
+  // A pool constructed without a failure callback must not throw on error.
+  const pool2 = new DecodeWorkerPool(factory.create, () => {})
+  pool2.resize(1)
+  pool2.submit({ id: 3 }, [])
+  let noCallbackSafe = true
+  try { factory.workers[2].onerror?.({ message: 'boom' }) } catch { noCallbackSafe = false }
+  noCallbackSafe = noCallbackSafe && pool2.busyCount === 0
+
+  const pass = handlersInstalled && slotFreed && msgErrFreed && noCallbackSafe
+  console.log('Decode worker pool worker-failure test:', pass ? 'PASS' : 'FAIL',
+    { handlersInstalled, slotFreed, msgErrFreed, noCallbackSafe })
+  return pass
+}
+
+export function testDecodeWorkerPoolJamDetector() {
+  const jammed = createJamDetector(4000)
+
+  // Healthy pool: replies keep busyCount below size — never a jam.
+  const healthy = jammed(2, 3, 0) === false && jammed(2, 3, 10_000) === false
+
+  // Going all-busy arms the clock; before the timeout it's not a jam yet.
+  const armed = jammed(3, 3, 20_000) === false && jammed(3, 3, 23_999) === false
+
+  // Still all-busy once the timeout elapses → jam.
+  const trips = jammed(3, 3, 24_000) === true
+
+  // Any free slot (a worker replied) disarms the clock entirely.
+  const resets = jammed(2, 3, 30_000) === false &&
+    jammed(3, 3, 31_000) === false && jammed(3, 3, 34_999) === false &&
+    jammed(3, 3, 35_000) === true
+
+  // An empty pool cannot jam.
+  const emptySafe = createJamDetector(1000)(0, 0, 99_999) === false
+
+  const pass = healthy && armed && trips && resets && emptySafe
+  console.log('Decode worker pool jam detector test:', pass ? 'PASS' : 'FAIL',
+    { healthy, armed, trips, resets, emptySafe })
   return pass
 }
 
