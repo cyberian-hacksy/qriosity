@@ -1,12 +1,16 @@
 // Receiver module - handles camera scanning and QR decoding
 import jsQR from 'jsqr'
+import QrDecodeWorker from './qr-decode-worker.js?worker&inline'
+import { DecodeWorkerPool } from './shared/decode-worker-pool.js'
 import { createDecoder } from './decoder.js'
+import { packetModeFromFlags } from './packet.js'
 import { QR_MODE } from './constants.js'
 import { ColorQRDecoder } from './color-decoder.js'
 import { formatBytes, formatTime } from './format.js'
 import { playBeep, announce, copyWithButtonFeedback } from './feedback.js'
 import { confirmDialog } from './confirm-dialog.js'
 import { triggerBlobDownload } from './shared/download.js'
+import { acquireWakeLock, releaseWakeLock } from './shared/wake-lock.js'
 import { isMobileUA, listVideoInputs, populateCameraSelect, nextCamera } from './shared/camera.js'
 
 // Debug mode - enabled via ?test URL parameter (exact param, not substring)
@@ -266,10 +270,12 @@ async function startScanning(deviceId) {
 
     // Reset decoder and calibration
     state.decoder = createDecoder()
+    initZxingPool()
     state.symbolTimes = []
     state.reconstructedBlob = null
     state.startTime = Date.now()
     state.isScanning = true
+    void acquireWakeLock()
     state.frameCount = 0
     state.detectCount = 0
     state.announcedReceiving = false
@@ -294,6 +300,8 @@ async function startScanning(deviceId) {
 // Stop scanning
 function stopScanning() {
   state.isScanning = false
+  releaseWakeLock()
+  teardownZxingPool()
 
   if (state.animationId) {
     cancelAnimationFrame(state.animationId)
@@ -383,6 +391,118 @@ function processPacket(bytes) {
   return accepted
 }
 
+// ============ zxing worker pool (dense-frame fast path) ============
+// jsQR cannot sustain v27/v40 frames at frame rate, so BW decoding runs in
+// zxing-cpp WASM workers when the module loads. 'unavailable' flips the
+// receiver to the jsQR fallback for good (e.g. file:// where fetching the
+// sibling .wasm is blocked); color modes always use the jsQR pipeline.
+let zxingPool = null
+let zxingStatus = 'unknown' // 'unknown' | 'ready' | 'unavailable'
+let zxingFrameId = 0
+let zxingCrop = null // latest crop geometry for the overlay in the async callback
+
+function zxingAvailable() {
+  return zxingPool !== null && zxingStatus !== 'unavailable'
+}
+
+function createZxingWorker() {
+  const worker = new QrDecodeWorker()
+  // The pool owns worker.onmessage; this one-shot listener only watches the
+  // init reply (id -1) to learn whether the WASM actually loaded.
+  const onFirst = (event) => {
+    if (!event.data || event.data.id !== -1) return
+    worker.removeEventListener('message', onFirst)
+    if (event.data.ready) {
+      zxingStatus = 'ready'
+    } else if (zxingStatus !== 'ready') {
+      zxingStatus = 'unavailable'
+      if (zxingPool) {
+        zxingPool.resize(0)
+        zxingPool = null
+      }
+    }
+  }
+  worker.addEventListener('message', onFirst)
+  worker.postMessage({
+    type: 'init',
+    wasmUrl: new URL('zxing/zxing_reader.wasm', document.baseURI).href
+  })
+  return worker
+}
+
+function initZxingPool() {
+  if (zxingPool || zxingStatus === 'unavailable') return
+  zxingPool = new DecodeWorkerPool(createZxingWorker, onZxingDecoded)
+  zxingPool.resize(Math.min(3, Math.max(1, (navigator.hardwareConcurrency || 4) - 2)))
+}
+
+function teardownZxingPool() {
+  if (!zxingPool) return
+  // Each worker holds a ~941 KB WASM instance — reclaim it between transfers.
+  zxingPool.resize(0)
+  zxingPool = null
+}
+
+function submitFrameToZxing(imageData, size, video, offsetX, offsetY) {
+  zxingCrop = { video, offsetX, offsetY, size }
+  // Transfers the pixel buffer; when every worker is busy the frame is simply
+  // dropped — the fountain absorbs it.
+  zxingPool.submit(
+    { id: zxingFrameId++, buf: imageData.data.buffer, w: size, h: size },
+    [imageData.data.buffer]
+  )
+}
+
+// zxing's corner points, reshaped to what showQROverlay expects (jsQR names).
+function zxingLocationFromPosition(position) {
+  return {
+    topLeftCorner: position.topLeft,
+    topRightCorner: position.topRight,
+    bottomRightCorner: position.bottomRight,
+    bottomLeftCorner: position.bottomLeft
+  }
+}
+
+function onZxingDecoded(bytes, data) {
+  if (!state.isScanning || !state.decoder) return
+  if (data && data.position && zxingCrop) {
+    showQROverlay(
+      zxingLocationFromPosition(data.position),
+      zxingCrop.video, zxingCrop.offsetX, zxingCrop.offsetY, zxingCrop.size
+    )
+  }
+  debugStatus('BW detected')
+  try {
+    handleBWPacketBytes(Uint8Array.from(bytes))
+  } catch (err) {
+    debugStatus('BW decode error')
+  }
+}
+
+// Ingest one decoded BW frame's packet bytes. Shared by the zxing worker
+// callback and the jsQR fallback inside scanFrame. Returns true when the
+// transfer just completed (the sync caller stops scheduling frames).
+function handleBWPacketBytes(bytes) {
+  // Check mode from the version/flags byte (bits 1-2) for auto-detection;
+  // the next scanFrame tick picks up the color pipeline from detectedMode.
+  if (state.detectedMode === null && bytes.length >= 1) {
+    const packetMode = packetModeFromFlags(bytes[0])
+    if (packetMode !== QR_MODE.BW) {
+      state.detectedMode = packetMode
+      updateModeStatus()
+    }
+  }
+
+  processPacket(bytes)
+  updateReceiverStats()
+
+  if (state.decoder.isComplete()) {
+    onReceiveComplete()
+    return true
+  }
+  return false
+}
+
 // Scan a single frame
 function scanFrame() {
   if (!state.isScanning) return
@@ -410,44 +530,29 @@ function scanFrame() {
     // Determine effective mode
     const effectiveMode = state.manualMode !== null ? state.manualMode : (state.detectedMode !== null ? state.detectedMode : QR_MODE.BW)
 
+    // BW fast path: hand the frame to the zxing worker pool and move on —
+    // decode results (and completion) arrive via onZxingDecoded. Skips the
+    // main-thread grayscale pass and jsQR call entirely.
+    if (effectiveMode === QR_MODE.BW && zxingAvailable()) {
+      submitFrameToZxing(imageData, size, video, offsetX, offsetY)
+      state.animationId = requestAnimationFrame(scanFrame)
+      return
+    }
+
     // Convert to grayscale for QR detection (try both inversions for better detection)
     const grayData = toGrayscale(imageData)
     const grayResult = jsQR(grayData, size, size)
 
     if (effectiveMode === QR_MODE.BW) {
-      // BW mode: use grayscale QR decode directly
+      // BW fallback: main-thread jsQR decode
       if (grayResult) {
         showQROverlay(grayResult.location, video, offsetX, offsetY, size)
         debugStatus('BW detected')
 
         try {
-          const binary = atob(grayResult.data)
-          const bytes = new Uint8Array(binary.length)
-          for (let i = 0; i < binary.length; i++) {
-            bytes[i] = binary.charCodeAt(i)
-          }
-
-          // Check mode from packet header for auto-detection
-          if (state.detectedMode === null && bytes.length >= 16) {
-            const flags = bytes[15]
-            const packetMode = (flags >> 1) & 0x03
-            if (packetMode !== QR_MODE.BW) {
-              state.detectedMode = packetMode
-              updateModeStatus()
-              // Process this packet (likely metadata) before switching modes
-              processPacket(bytes)
-              updateReceiverStats()
-              state.animationId = requestAnimationFrame(scanFrame)
-              return
-            }
-          }
-
-          processPacket(bytes)
-          updateReceiverStats()
-
-          if (state.decoder.isComplete()) {
-            onReceiveComplete()
-            return
+          // Raw binary QR payload — the packet bytes as transmitted.
+          if (handleBWPacketBytes(Uint8Array.from(grayResult.binaryData))) {
+            return // transfer complete — stop scheduling frames
           }
         } catch (err) {
           debugStatus('BW decode error')
@@ -555,23 +660,18 @@ function scanFrame() {
           const chResult = channelResults[i]
           if (chResult) {
             try {
-              const binary = atob(chResult.data)
-              const bytes = new Uint8Array(binary.length)
-              for (let j = 0; j < binary.length; j++) {
-                bytes[j] = binary.charCodeAt(j)
-              }
+              // Raw binary QR payload — the packet bytes as transmitted.
+              const bytes = Uint8Array.from(chResult.binaryData)
 
-              // Extract symbol ID from header (bytes 9-12, big-endian)
-              if (bytes.length >= 13) {
-                const symId = (bytes[9] << 24) | (bytes[10] << 16) | (bytes[11] << 8) | bytes[12]
+              // Extract symbol ID from header (bytes 8-10, 24-bit big-endian)
+              if (bytes.length >= 11) {
+                const symId = (bytes[8] << 16) | (bytes[9] << 8) | bytes[10]
                 symIds.push(symId >>> 0)
               }
 
-              // Auto-detect mode from first packet
-              if (state.detectedMode === null && bytes.length >= 16) {
-                const flags = bytes[15]
-                const packetMode = (flags >> 1) & 0x03
-                state.detectedMode = packetMode
+              // Auto-detect mode from the version/flags byte (bits 1-2)
+              if (state.detectedMode === null && bytes.length >= 1) {
+                state.detectedMode = packetModeFromFlags(bytes[0])
                 updateModeStatus()
               }
 
@@ -734,7 +834,9 @@ async function onReceiveComplete() {
     // Notify user of successful completion
     playBeep()
 
-    const data = state.decoder.reconstruct()
+    // reconstructFile() inflates gzip-compressed streams; verify() above
+    // already proved the result hashes to the sender's original bytes.
+    const data = await state.decoder.reconstructFile()
     const metadata = state.decoder.metadata
 
     state.reconstructedBlob = new Blob([data], { type: metadata.mimeType })

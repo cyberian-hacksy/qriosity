@@ -5,6 +5,8 @@ import { METADATA_INTERVAL } from '../constants.js'
 import { PACKET_HEADER_SIZE } from '../packet.js'
 import { formatBytes } from '../format.js'
 import { wireDropZone } from '../shared/dropzone.js'
+import { acquireWakeLock, releaseWakeLock } from '../shared/wake-lock.js'
+import { maybeCompress } from '../shared/compression.js'
 import { announce, flashHighlight, copyWithButtonFeedback } from '../feedback.js'
 import { ArqSenderController, getArqSenderDisplayProgress } from '../arq/arq-sender.js'
 import { getTransport } from '../arq/backchannel.js'
@@ -390,6 +392,7 @@ async function teardownPresentationSurface() {
 }
 
 async function restoreSenderReadyState() {
+  releaseWakeLock()
   resetRenderSchedule()
   resetHdmiFrameResources()
   resetPreparedSessionState()
@@ -970,6 +973,7 @@ function beginPreparedStart() {
   state.isAwaitingStart = false
   state.isSending = true
   state.isPaused = false
+  void acquireWakeLock()
   state.frameCount = 0
   state.nextFrameDueMs = performance.now() + (1000 / getFps().fps)
   resetSenderPerfState()
@@ -1013,7 +1017,9 @@ async function startSending() {
     const batchingProfile = getBatchingProfile(state.mode)
     const selectedBatching = selectFrameBatching({
       capacity,
-      fileSize: state.fileSize,
+      // Batching is sized for what actually goes on the wire, which is the
+      // compressed byte count when gzip engaged at file selection.
+      fileSize: state.fileData.byteLength,
       profile: batchingProfile
     })
     const {
@@ -1048,7 +1054,7 @@ async function startSending() {
       state.fileHash,
       blockSize,
       undefined,
-      { noRedundancy: state.yolo }
+      { noRedundancy: state.yolo, compressed: !!state.compressed, originalSize: state.fileSize }
     )
     state.packetSize = blockSize + PACKET_HEADER_SIZE
     state.packetsPerFrame = bestPacketsPerFrame
@@ -1124,6 +1130,7 @@ async function pauseSending() {
 async function resumeSending() {
   try {
     state.isPaused = false
+    void acquireWakeLock()
     elements.placeholder.style.display = 'none'
 
     const { target, stableMetrics } = await preparePresentationForTransmission()
@@ -1155,6 +1162,7 @@ async function stopSending() {
   state.fileName = null
   state.fileSize = 0
   state.fileHash = null
+  state.compressed = false
 
   // With the file cleared, this resets the session, tears down the
   // presentation surface, and restores the empty drop-zone UI.
@@ -1191,12 +1199,15 @@ async function processFile(file) {
 
   try {
     const buffer = await file.arrayBuffer()
+    // Hash the ORIGINAL bytes — the receiver verifies after decompression.
     const hash = new Uint8Array(await crypto.subtle.digest('SHA-256', buffer))
+    const { bytes: wireBytes, compressed } = await maybeCompress(new Uint8Array(buffer), file.type || '')
 
-    state.fileData = buffer
+    state.fileData = wireBytes.buffer // wire bytes: gzipped when compressed
     state.fileName = file.name
-    state.fileSize = file.size
+    state.fileSize = file.size // original size, for display and metadata
     state.fileHash = hash
+    state.compressed = compressed
     resetPreparedSessionState()
     state.isSending = false
     state.isPaused = false

@@ -2,6 +2,7 @@
 import { loadCimbarWasm, getModule } from './cimbar-loader.js'
 import { formatBytes, formatTime } from '../format.js'
 import { wireDropZone } from '../shared/dropzone.js'
+import { acquireWakeLock, releaseWakeLock } from '../shared/wake-lock.js'
 
 const MAX_FILE_SIZE = 33 * 1024 * 1024 // 33MB (CIMBAR limit)
 
@@ -190,6 +191,7 @@ async function startSending() {
 
     state.isSending = true
     state.isPaused = false
+    void acquireWakeLock()
     state.frameCount = 0
 
     elements.sizeSlider.disabled = true
@@ -206,6 +208,7 @@ async function startSending() {
 
 function pauseSending() {
   state.isPaused = true
+  releaseWakeLock()
   if (state.timerId) {
     clearTimeout(state.timerId)
     state.timerId = null
@@ -215,11 +218,13 @@ function pauseSending() {
 
 function resumeSending() {
   state.isPaused = false
+  void acquireWakeLock()
   updateActionButton()
   renderFrame()
 }
 
 function stopSending() {
+  releaseWakeLock()
   if (state.timerId) {
     clearTimeout(state.timerId)
     state.timerId = null
