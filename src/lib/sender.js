@@ -25,7 +25,8 @@ const state = {
   isPaused: false,
   isSending: false,
   frameCount: 0,
-  mode: QR_MODE.BW
+  mode: QR_MODE.BW,
+  payloadKind: 'file' // 'file' | 'text' — which sender pane feeds the stream
 }
 
 // DOM elements (initialized on setup)
@@ -123,18 +124,37 @@ function drawCalibrationPatches(ctx, canvasSize, margin) {
   }
 }
 
-// Update drop zone appearance based on state
+// Update drop zone appearance based on state. In Text mode the container is
+// no longer a file target — it's just where the QR will appear — so it goes
+// inert and says so instead of inviting a drop.
 function updateDropZoneState() {
   const container = elements.qrContainer
+  const textMode = state.payloadKind === 'text'
+  const icon = elements.qrPlaceholder.querySelector('.drop-zone-icon')
+  const label = icon?.nextElementSibling
+
   if (!state.encoder) {
     container.classList.add('empty')
     container.classList.remove('has-file')
-    container.setAttribute('tabindex', '0')
-    container.setAttribute('aria-disabled', 'false')
+    // No icon in Text mode — the sentence alone says what the area is; the
+    // big "+" glyph only makes sense as a drop/pick affordance.
+    if (icon) {
+      icon.textContent = '+'
+      icon.style.display = textMode ? 'none' : ''
+    }
+    if (label) label.textContent = textMode
+      ? 'QR code appears here — press "Send text"'
+      : 'Drop file here or select one'
+    container.setAttribute('aria-label', textMode
+      ? 'QR code display area'
+      : 'Choose a file to send')
+    // Interactive as a picker only in File mode.
+    container.setAttribute('tabindex', textMode ? '-1' : '0')
+    container.setAttribute('aria-disabled', String(textMode))
   } else {
     container.classList.remove('empty')
     container.classList.add('has-file')
-    // The zone stops being interactive once a file is loaded.
+    // The zone stops being interactive once a payload is loaded.
     container.setAttribute('tabindex', '-1')
     container.setAttribute('aria-disabled', 'true')
   }
@@ -639,13 +659,20 @@ export function initSender(errorHandler) {
   // Payload-type toggle: Text swaps the drop-zone flow for a paste box. The
   // snippet still travels the file pipeline (hash/gzip/fountain) — it's a
   // synthetic File with a private MIME type the receiver shows inline.
+  // Switching kinds kills any payload in flight: a file QR pulsing away under
+  // a text pane (or vice versa) reads as "still sending the old thing".
   const setPayloadKind = (kind) => {
+    if (kind === state.payloadKind) return
+    state.payloadKind = kind
+    if (state.encoder) stopSending()
     const isText = kind === 'text'
     elements.btnPayloadFile.classList.toggle('active', !isText)
     elements.btnPayloadFile.setAttribute('aria-pressed', String(!isText))
     elements.btnPayloadText.classList.toggle('active', isText)
     elements.btnPayloadText.setAttribute('aria-pressed', String(isText))
     elements.snippetPane.classList.toggle('hidden', !isText)
+    updateDropZoneState()
+    updateActionButton()
   }
   elements.btnPayloadFile.onclick = () => setPayloadKind('file')
   elements.btnPayloadText.onclick = () => setPayloadKind('text')
@@ -674,7 +701,9 @@ export function initSender(errorHandler) {
   wireDropZone({
     container: elements.qrContainer,
     fileInput: elements.fileInput,
-    hasFile: () => !!state.encoder,
+    // In Text mode the container is a display area, not a file target —
+    // clicks, Enter/Space, and drops are all inert.
+    hasFile: () => !!state.encoder || state.payloadKind === 'text',
     onFile: processFile
   })
 }

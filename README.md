@@ -26,7 +26,7 @@ Air-gapped file transfer between devices with zero network connectivity. Three t
 
 | Mode | Speed | Notes |
 |------|-------|-------|
-| **QR Transfer** | up to ~700 kbps | Standard QR format (up to v40 frames at 30 fps), camera-based |
+| **QR Transfer** | ~50 KB/s sustained | Standard QR format (up to v40 frames), camera-based |
 | **CIMBAR Transfer** | ~850 kbps | High-density color-coded format, camera-based |
 | **HDMI-UVC Transfer** | up to ~20 MB/s | HDMI out → UVC capture card, optional Bluetooth ARQ back-channel |
 
